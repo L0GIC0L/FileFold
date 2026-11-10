@@ -322,7 +322,8 @@ object Archives {
                 }
             }
         } catch (e: WrongPasswordException) {
-            throw ArchivePasswordException(wrongPassword = true)
+            // With encrypted headers junrar reports a missing password as a wrong one.
+            throw ArchivePasswordException(wrongPassword = password != null)
         } catch (e: UnsupportedRarEncryptedException) {
             throw IOException("This RAR archive uses an encryption method that is not supported")
         } catch (e: RarException) {
