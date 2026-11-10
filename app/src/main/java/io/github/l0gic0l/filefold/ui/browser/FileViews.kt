@@ -82,7 +82,8 @@ fun FileList(
 ) {
     val selecting = selection.isNotEmpty()
     LazyColumn(state = state, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
-        items(items, key = { it.path }) { item ->
+        // The content type lets a scrolled-off row be reused for one shaped the same way.
+        items(items, key = { it.path }, contentType = { it.kind }) { item ->
             val selected = item.path in selection
             ListItem(
                 headlineContent = { Text(item.name, maxLines = 1, overflow = TextOverflow.MiddleEllipsis) },
@@ -130,7 +131,7 @@ fun FileGrid(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(items, key = { it.path }) { item ->
+        items(items, key = { it.path }, contentType = { it.kind }) { item ->
             val selected = item.path in selection
             val shape = RoundedCornerShape(20.dp)
             Surface(

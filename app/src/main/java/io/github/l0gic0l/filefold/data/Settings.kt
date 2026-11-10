@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.l0gic0l.filefold.core.SortBy
@@ -21,6 +22,9 @@ data class AppSettings(
     val editorFontSize: Float = 14f,
 )
 
+/** Open tabs as saved strings (see Location.encode) and which one was active. */
+data class SavedTabs(val tabs: List<String>, val active: Int)
+
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
 /** User preferences, persisted with DataStore so they survive restarts. */
@@ -35,6 +39,18 @@ class SettingsRepository(private val context: Context) {
         val wordWrap = booleanPreferencesKey("editor_word_wrap")
         val lineNumbers = booleanPreferencesKey("editor_line_numbers")
         val fontSize = floatPreferencesKey("editor_font_size")
+        val tabs = stringPreferencesKey("tabs")
+        val activeTab = intPreferencesKey("active_tab")
+    }
+
+    /** Kept apart from [settings] so that saving tabs on every navigation does not re-emit settings. */
+    val savedTabs: Flow<SavedTabs> = context.dataStore.data.map { prefs ->
+        SavedTabs(prefs[Keys.tabs]?.split('\n')?.filter { it.isNotEmpty() }.orEmpty(), prefs[Keys.activeTab] ?: 0)
+    }
+
+    suspend fun setTabs(tabs: List<String>, active: Int) = edit {
+        it[Keys.tabs] = tabs.joinToString("\n")
+        it[Keys.activeTab] = active
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->

@@ -1,6 +1,10 @@
 package io.github.l0gic0l.filefold.util
 
 import java.text.DateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Date
 import java.util.Locale
 import kotlin.math.ln
@@ -22,8 +26,20 @@ object Format {
     fun date(millis: Long): String =
         if (millis <= 0) "—" else DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(millis))
 
-    fun shortDate(millis: Long): String =
-        if (millis <= 0) "" else DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(millis))
+    // Building a date formatter is slow, and a fast scroll formats hundreds of dates, so reuse one.
+    // java.time formatters are immutable and thread safe; rebuilt only if the locale or zone changes.
+    @Volatile
+    private var shortDateFormat: Triple<Locale, ZoneId, DateTimeFormatter>? = null
+
+    fun shortDate(millis: Long): String {
+        if (millis <= 0) return ""
+        val locale = Locale.getDefault()
+        val zone = ZoneId.systemDefault()
+        val cached = shortDateFormat?.takeIf { it.first == locale && it.second == zone }
+            ?: Triple(locale, zone, DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).withZone(zone))
+                .also { shortDateFormat = it }
+        return cached.third.format(Instant.ofEpochMilli(millis))
+    }
 
     fun items(count: Int): String = when (count) {
         -1 -> "Folder"

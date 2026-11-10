@@ -11,15 +11,31 @@ android {
         applicationId = "io.github.l0gic0l.filefold"
         minSdk = 30
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
+    }
+
+    signingConfigs {
+        // A development key kept in the repository, so every build, local or from CI, is signed
+        // the same way and installs over the previous one. It is not a secret and protects
+        // nothing: create a private key and use it here before publishing to an app store.
+        create("dev") {
+            storeFile = file("signing/dev.keystore")
+            storePassword = "filefold-dev"
+            keyAlias = "filefold"
+            keyPassword = "filefold-dev"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("dev")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("dev")
         }
     }
 

@@ -18,6 +18,7 @@ data class FileItem(
     /** Compressed size for archive entries, -1 when not applicable. */
     val compressedSize: Long = -1,
 ) {
-    val kind: FileKind get() = FileTypes.kindOf(name, isDirectory)
+    /** Worked out once, not on every redraw while scrolling. */
+    val kind: FileKind = FileTypes.kindOf(name, isDirectory)
     val isHidden: Boolean get() = name.startsWith(".")
 }

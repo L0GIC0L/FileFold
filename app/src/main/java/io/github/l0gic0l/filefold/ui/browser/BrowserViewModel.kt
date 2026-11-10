@@ -2,6 +2,7 @@ package io.github.l0gic0l.filefold.ui.browser
 
 import android.app.Application
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -37,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -56,8 +58,20 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     var settings by mutableStateOf(AppSettings())
         private set
 
+    /** The active tab's folder. */
     var location by mutableStateOf<Location>(Location.Disk(Storage.primaryRoot.absolutePath))
         private set
+
+    private var nextTabId = 1L
+
+    /** Open tabs, in display order. */
+    var tabs by mutableStateOf(listOf(BrowserTab(nextTabId++, location)))
+        private set
+    var activeTabId by mutableLongStateOf(tabs.first().id)
+        private set
+
+    /** What the folder area is showing; transitions animate between pages. */
+    val page: Page get() = Page(activeTabId, location)
 
     /** Storage volumes (internal, SD card, USB) followed by the standard folders. Refreshed on resume. */
     var places by mutableStateOf(Storage.volumes(app) + Storage.shortcuts())
@@ -103,8 +117,17 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     private val _messages = Channel<UiMessage>(Channel.BUFFERED)
     val messages = _messages.receiveAsFlow()
 
-    /** First visible item and offset for folders visited earlier, so going back restores the view. */
+    /** First visible item and offset for folders visited earlier, so going back restores the view. Keyed by [Page.scrollKey]. */
     val scrollMemory = HashMap<String, Pair<Int, Int>>()
+
+    /**
+     * The last listing seen for recently visited folders (unsorted). Revisiting a folder shows
+     * it instantly while a fresh listing loads, and the back gesture can preview the parent.
+     * Only touched on the main thread.
+     */
+    private val listingCache = object : LinkedHashMap<String, List<FileItem>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<FileItem>>?) = size > 48
+    }
 
     private var loadJob: Job? = null
     private var operationJob: Job? = null
@@ -113,13 +136,17 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch(Dispatchers.IO) { previewCache.deleteRecursively() }
         viewModelScope.launch {
+            restoreTabs()
             var first = true
             settingsRepo.settings.collect { new ->
                 val old = settings
                 settings = new
                 when {
                     first -> load()
-                    new.showHidden != old.showHidden -> load()
+                    new.showHidden != old.showHidden -> {
+                        listingCache.clear()
+                        load()
+                    }
                     new.sort != old.sort -> applyFilterAndSort()
                 }
                 first = false
@@ -131,14 +158,90 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     fun navigate(to: Location) {
         if (to == location) return
+        tabs = tabs.map { if (it.id == activeTabId) it.copy(location = to) else it }
+        show(to)
+    }
+
+    /** Switches the folder area to [to]: the cached listing at once if there is one, then a fresh one. */
+    private fun show(to: Location) {
         location = to
         selection = emptySet()
         search = null
-        // Clear straight away so the old folder's files never show under the new folder's name.
-        rawItems = emptyList()
-        items = emptyList()
         error = null
+        // Never the previous folder's files: either this folder's last listing or nothing.
+        rawItems = listingCache[to.key].orEmpty()
+        applyFilterAndSort()
         load()
+        persistTabs()
+    }
+
+    // ------------------------------------------------------------ tabs
+
+    /** Opens a new tab at [at] (the current folder by default), right after the active tab. */
+    fun newTab(at: Location = location) {
+        val tab = BrowserTab(nextTabId++, at)
+        val index = tabs.indexOfFirst { it.id == activeTabId }
+        tabs = tabs.toMutableList().apply { add(index + 1, tab) }
+        switchTab(tab.id)
+    }
+
+    /** Opens a folder or archive from the list in a new tab. */
+    fun openInNewTab(item: FileItem) {
+        val loc = location
+        val target = when {
+            loc is Location.InArchive && item.isDirectory -> Location.InArchive(loc.archivePath, item.path)
+            item.isDirectory -> Location.Disk(item.path)
+            else -> Location.InArchive(item.path, "")
+        }
+        clearSelection()
+        newTab(target)
+    }
+
+    fun switchTab(id: Long) {
+        if (id == activeTabId) return
+        val tab = tabs.firstOrNull { it.id == id } ?: return
+        activeTabId = id
+        show(tab.location)
+    }
+
+    fun closeTab(id: Long) {
+        if (tabs.size <= 1) return
+        val index = tabs.indexOfFirst { it.id == id }.takeIf { it >= 0 } ?: return
+        val remaining = tabs.filterNot { it.id == id }
+        tabs = remaining
+        scrollMemory.keys.removeAll { it.startsWith("$id|") }
+        if (id == activeTabId) {
+            val next = remaining[index.coerceAtMost(remaining.lastIndex)]
+            activeTabId = next.id
+            show(next.location)
+        } else {
+            persistTabs()
+        }
+    }
+
+    /** A short name for a tab: the folder's name, or the archive's for its root. */
+    fun tabLabel(loc: Location): String = when (loc) {
+        is Location.Disk -> volumes.firstOrNull { it.path == loc.path }?.label ?: File(loc.path).name.ifEmpty { "/" }
+        is Location.InArchive -> if (loc.dir.isEmpty()) File(loc.archivePath).name else ArchiveIndex.nameOf(loc.dir)
+    }
+
+    private fun persistTabs() {
+        val saved = tabs.map { it.location.encode() }
+        val active = tabs.indexOfFirst { it.id == activeTabId }.coerceAtLeast(0)
+        viewModelScope.launch { settingsRepo.setTabs(saved, active) }
+    }
+
+    /** Reopens the tabs from last time, skipping folders that have since gone. */
+    private suspend fun restoreTabs() {
+        val saved = settingsRepo.savedTabs.first()
+        val restored = withContext(Dispatchers.IO) {
+            saved.tabs.mapNotNull(Location::decode).filter { File(it.diskPath).exists() }
+        }
+        if (restored.isEmpty()) return
+        tabs = restored.map { BrowserTab(nextTabId++, it) }
+        val active = tabs[saved.active.coerceIn(0, tabs.lastIndex)]
+        activeTabId = active.id
+        location = active.location
     }
 
     fun openPlace(path: String) = navigate(Location.Disk(path))
@@ -168,6 +271,9 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     val canNavigateUp: Boolean get() = parentOf(location) != null
 
+    /** Where "up" leads from the current folder, or null at the top of a volume. */
+    val parentLocation: Location? get() = parentOf(location)
+
     /** Handles the back gesture in the browser. Returns false when there is nothing left to undo. */
     fun back(): Boolean = when {
         selectionMode -> { clearSelection(); true }
@@ -175,12 +281,9 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         else -> navigateUp()
     }
 
-    fun breadcrumbs(): List<Crumb> {
+    fun breadcrumbs(loc: Location = location): List<Crumb> {
         val crumbs = ArrayList<Crumb>()
-        val diskPath = when (val loc = location) {
-            is Location.Disk -> loc.path
-            is Location.InArchive -> loc.archivePath
-        }
+        val diskPath = loc.diskPath
         val root = Storage.volumeRootOf(volumes, diskPath)
         if (root != null) {
             crumbs += Crumb(volumes.first { it.path == root }.label, Location.Disk(root))
@@ -192,7 +295,6 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             crumbs += Crumb(File(diskPath).name.ifEmpty { "/" }, Location.Disk(diskPath))
         }
-        val loc = location
         if (loc is Location.InArchive) {
             // The archive itself stands for its root folder.
             crumbs[crumbs.lastIndex] = Crumb(File(loc.archivePath).name, Location.InArchive(loc.archivePath, ""))
@@ -252,17 +354,39 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 error = problem
+                if (problem == null) listingCache[target.key] = rawItems
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 rawItems = emptyList()
+                listingCache.remove(target.key)
                 error = e.message ?: "Could not open this folder"
             } finally {
                 loading = false
             }
             applyFilterAndSort()
+            prefetchParent(target)
         }
     }
+
+    /** Lists the parent folder ahead of time, so a back gesture can show it as it starts. */
+    private suspend fun prefetchParent(of: Location) {
+        val parent = parentOf(of) ?: return
+        if (listingCache.containsKey(parent.key)) return
+        val listing = try {
+            when (parent) {
+                is Location.Disk -> withContext(Dispatchers.IO) { FileOps.list(File(parent.path), settings.showHidden) }
+                is Location.InArchive -> archive?.takeIf { it.file.path == parent.archivePath }?.index?.list(parent.dir)
+            }
+        } catch (e: IOException) {
+            null
+        } ?: return
+        listingCache[parent.key] = listing
+    }
+
+    /** What to draw for [loc] while it animates in or out: live for the current folder, cached otherwise. */
+    fun itemsFor(loc: Location): List<FileItem> =
+        if (loc == location) items else listingCache[loc.key]?.sortedWith(settings.sort.comparator()).orEmpty()
 
     /**
      * Returns the cached session for an archive, reading its index when it is

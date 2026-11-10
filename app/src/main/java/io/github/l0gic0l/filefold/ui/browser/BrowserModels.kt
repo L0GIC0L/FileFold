@@ -19,6 +19,44 @@ sealed interface Location {
     data class InArchive(val archivePath: String, val dir: String) : Location {
         override val key: String get() = "$archivePath!/$dir"
     }
+
+    /** The path on disk: the folder itself, or the archive file for a folder inside an archive. */
+    val diskPath: String
+        get() = when (this) {
+            is Disk -> path
+            is InArchive -> archivePath
+        }
+
+    /** True when this location lies somewhere inside [other], at any depth. */
+    fun isInside(other: Location): Boolean = when (other) {
+        is Disk -> diskPath.startsWith(other.path.trimEnd('/') + "/")
+        is InArchive -> this is InArchive && archivePath == other.archivePath && dir != other.dir &&
+            (other.dir.isEmpty() || dir.startsWith(other.dir + "/"))
+    }
+
+    /** A string form for saving open tabs, read back by [decode]. */
+    fun encode(): String = when (this) {
+        is Disk -> "d:$path"
+        is InArchive -> "a:$archivePath!/$dir"
+    }
+
+    companion object {
+        fun decode(value: String): Location? = when {
+            value.startsWith("d:") -> Disk(value.removePrefix("d:"))
+            value.startsWith("a:") -> value.removePrefix("a:").split("!/", limit = 2)
+                .takeIf { it.size == 2 }?.let { InArchive(it[0], it[1]) }
+            else -> null
+        }
+    }
+}
+
+/** One browser tab. Each tab has its own folder; scroll positions are remembered per tab. */
+data class BrowserTab(val id: Long, val location: Location)
+
+/** What the folder area shows: a folder, in a particular tab. Transitions animate between pages. */
+data class Page(val tabId: Long, val location: Location) {
+    /** Key for remembering this page's scroll position. */
+    val scrollKey: String get() = "$tabId|${location.key}"
 }
 
 /** An archive that is open for browsing. The index is cached so moving between its folders is instant. */

@@ -6,7 +6,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -17,8 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -46,10 +43,10 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,9 +65,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,37 +85,18 @@ import io.github.l0gic0l.filefold.archive.ArchiveFormat
 import io.github.l0gic0l.filefold.core.FileItem
 import io.github.l0gic0l.filefold.core.SortBy
 import io.github.l0gic0l.filefold.ui.detail.DetailTarget
-import kotlinx.coroutines.delay
 import java.io.File
 
-/** The file list: top bar, breadcrumbs, contents and the paste bar. */
+/** The file list: top bar, tabs, breadcrumbs, contents and the paste bar. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Unit) {
     val location = vm.location
     val inArchive = location is Location.InArchive
-    val crumbs = remember(location, vm.places) { vm.breadcrumbs() }
+    val title = remember(location, vm.places) { vm.tabLabel(location) }
 
-    BackHandler(enabled = vm.selectionMode || vm.search != null || vm.canNavigateUp) { vm.back() }
-
-    // Each folder keeps its own scroll position, restored when you come back to it.
-    val listState = remember(location.key) { LazyListState() }
-    val gridState = remember(location.key) { LazyGridState() }
-    DisposableEffect(location.key) {
-        val key = location.key
-        onDispose {
-            vm.scrollMemory[key] = if (vm.settings.gridView) {
-                gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset
-            } else {
-                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-            }
-        }
-    }
-    LaunchedEffect(location.key, vm.items, vm.loading) {
-        if (vm.loading || vm.items.isEmpty()) return@LaunchedEffect
-        val (index, offset) = vm.scrollMemory.remove(location.key) ?: return@LaunchedEffect
-        if (vm.settings.gridView) gridState.scrollToItem(index, offset) else listState.scrollToItem(index, offset)
-    }
+    // Selection and search close on back; going up a folder is the predictive gesture in FolderPages.
+    BackHandler(enabled = vm.selectionMode || vm.search != null) { vm.back() }
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
@@ -130,7 +106,7 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
                 vm.selectionMode -> SelectionBar(vm, inArchive)
                 vm.search != null -> SearchBar(vm)
                 else -> TopAppBar(
-                    title = { Text(crumbs.lastOrNull()?.label.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         when {
                             showMenuButton -> IconButton(onClick = onMenu) { Icon(Icons.Default.Menu, "Storage locations") }
@@ -156,49 +132,9 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
-            Breadcrumbs(crumbs) { vm.navigate(it) }
-            val archive = vm.archive
-            if (location is Location.InArchive && archive != null && archive.file.path == location.archivePath && vm.error == null) {
-                ArchiveBanner(archive) { vm.promptExtract(archive.file.path) }
-            }
-            var userRefresh by remember { mutableStateOf(false) }
-            LaunchedEffect(vm.loading) { if (!vm.loading) userRefresh = false }
-            PullToRefreshBox(
-                isRefreshing = userRefresh,
-                onRefresh = { userRefresh = true; vm.refresh() },
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                // Room at the bottom so the last row can scroll clear of the FAB and gesture bar.
-                val contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + 96.dp)
-                val error = vm.error
-                when {
-                    error != null -> ErrorState(error) { vm.refresh() }
-                    vm.items.isEmpty() && vm.loading -> DelayedSpinner()
-                    vm.items.isEmpty() -> EmptyState(searching = !vm.search.isNullOrBlank(), inArchive = inArchive)
-                    vm.settings.gridView -> FileGrid(
-                        vm.items, vm.selection, inArchive, gridState, contentPadding,
-                        onClick = vm::open, onLongClick = vm::toggleSelection,
-                    )
-                    else -> FileList(
-                        vm.items, vm.selection, inArchive, listState, contentPadding,
-                        onClick = vm::open, onLongClick = vm::toggleSelection,
-                    )
-                }
-            }
+            AnimatedVisibility(visible = vm.tabs.size > 1) { TabStrip(vm) }
+            FolderPages(vm, bottomPadding = padding.calculateBottomPadding())
         }
-    }
-}
-
-/** A spinner that only appears if loading takes long enough to notice, so fast folders do not flicker. */
-@Composable
-private fun DelayedSpinner() {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(250)
-        visible = true
-    }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (visible) CircularProgressIndicator()
     }
 }
 
@@ -227,6 +163,7 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
             } else {
                 item("Show as grid", Icons.Default.GridView) { vm.setGridView(true) }
             }
+            item("New tab", Icons.Default.Tab) { vm.newTab() }
             item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
             item("Refresh", Icons.Default.Refresh) { vm.refresh() }
             if (!inArchive) {
@@ -323,6 +260,9 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
                     Icon(Icons.Default.Unarchive, "Extract selected")
                 }
                 IconButton(onClick = { vm.copySelection(cut = false) }) { Icon(Icons.Default.ContentCopy, "Copy out of archive") }
+                if (single != null && single.isDirectory) {
+                    IconButton(onClick = { vm.openInNewTab(single) }) { Icon(Icons.Default.Tab, "Open in new tab") }
+                }
                 IconButton(onClick = vm::selectAll) { Icon(Icons.Default.SelectAll, "Select all") }
                 return@TopAppBar
             }
@@ -337,6 +277,9 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
                     fun action(text: String, icon: ImageVector, run: () -> Unit) =
                         DropdownMenuItem(text = { Text(text) }, leadingIcon = { Icon(icon, null) }, onClick = { open = false; run() })
 
+                    if (single != null && (single.isDirectory || ArchiveFormat.fromName(single.name) != null)) {
+                        action("Open in new tab", Icons.Default.Tab) { vm.openInNewTab(single) }
+                    }
                     if (single != null) action("Rename", Icons.Default.DriveFileRenameOutline) { vm.dialog = BrowserDialog.Rename(single) }
                     action("Compress…", Icons.Default.Compress) {
                         vm.dialog = BrowserDialog.Compress(selected.map { File(it.path) }, suggestedArchiveName(vm, selected))

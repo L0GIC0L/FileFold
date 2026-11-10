@@ -10,7 +10,15 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
 **Browsing**
 - List and grid views, with thumbnails for photos.
 - Breadcrumb path bar, per-folder search, and pull to refresh.
-- Each folder remembers its scroll position when you come back to it.
+- **Tabs:** keep several folders or archives open at once. Use **New tab** in
+  the menu, or select a folder and choose **Open in new tab**. Each tab
+  remembers its own scroll positions, and your tabs are still there next time
+  you open the app.
+- Each folder remembers its scroll position when you come back to it, and
+  folders you have already visited appear instantly.
+- **Predictive back:** as you swipe back, the current folder shrinks and slides
+  away and the parent folder shows behind it, so you can see where you are
+  going. Let go early to stay put. Going into a folder slides the other way.
 - Storage locations: internal storage, any SD card or USB drive, and the
   standard folders (Downloads, Documents, Pictures, Camera, Music, Movies).
 - Colours follow your wallpaper (Material You), in light and dark theme.
@@ -99,8 +107,15 @@ You need JDK 17 or newer and the Android SDK, with platform 37 installed.
 ./gradlew installDebug           # build and install on a connected device
 ```
 
-Every push to GitHub runs the same build and tests. The debug APK is attached
-to the run as an artifact, so you can install it without building anything.
+Every push to GitHub runs the tests and builds the optimised release APK. It is
+attached to the run as the **FileFold-apk** artifact, so you can install it
+without building anything. Install the release build rather than a debug one:
+debug builds of Compose apps are much slower, and scrolling stutters.
+
+All builds are signed with a development key kept in the repository
+(`app/signing/dev.keystore`), so each new build installs over the last one and
+keeps your settings. The key is not a secret. Make a private key and use it
+before publishing to an app store.
 
 On first launch FileFold asks for **All files access**. Android requires this
 permission for an app to manage files outside its own folder.
