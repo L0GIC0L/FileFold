@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -307,7 +308,8 @@ private fun SwatchGrid(selected: Int?, onPick: (Int) -> Unit) {
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(44.dp)
-                    .border(if (isSelected) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                    // Only the chosen swatch gets a ring (a 0 dp border would still draw a hairline).
+                    .then(if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
                     .padding(4.dp)
                     .background(Color(argb), CircleShape)
                     .clickable(role = Role.RadioButton) { onPick(argb) }
@@ -350,13 +352,21 @@ private fun Color.luminanceIsDark(): Boolean = (0.299 * red + 0.587 * green + 0.
 @Composable
 private fun KindGrid(settings: AppSettings, onEdit: (FileKind) -> Unit) {
     LocalFileColors.current // read so the grid redraws as colours change
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FileKind.entries.forEach { kind ->
+    // An even grid: as many columns as fit, every tile the same width, the last row padded out.
+    BoxWithConstraints {
+        val columns = ((maxWidth + 8.dp) / (160.dp + 8.dp)).toInt().coerceAtLeast(1)
+        val kinds = FileKind.entries
+        FlowRow(
+            maxItemsInEachRow = columns,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+        kinds.forEach { kind ->
             Surface(
                 onClick = { onEdit(kind) },
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
-                modifier = Modifier.widthIn(min = 150.dp),
+                modifier = Modifier.weight(1f),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
                     KindBadge(kind, size = 36.dp)
@@ -369,6 +379,8 @@ private fun KindGrid(settings: AppSettings, onEdit: (FileKind) -> Unit) {
                     }
                 }
             }
+        }
+        repeat((columns - kinds.size % columns) % columns) { Spacer(Modifier.weight(1f)) }
         }
     }
 }

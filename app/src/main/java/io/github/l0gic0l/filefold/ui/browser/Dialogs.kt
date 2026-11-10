@@ -106,7 +106,11 @@ fun BrowserDialogs(vm: BrowserViewModel) {
                     }
                     Spacer(Modifier.padding(4.dp))
                     Text(
-                        "Existing folders are not touched, nothing is overwritten, and you can undo afterwards.",
+                        if (d.plan.moves.any { it.source.isDirectory }) {
+                            "The folders it sorts into are never moved, nothing is overwritten, and you can undo afterwards."
+                        } else {
+                            "Existing folders are not touched, nothing is overwritten, and you can undo afterwards."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

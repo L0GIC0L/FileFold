@@ -100,7 +100,8 @@ class CodeEditText(context: Context, attrs: AttributeSet?) : EditText(context, a
         numberPaint.typeface = typeface
         val pad = (8 * density).toInt()
         gutterWidth = if (lineNumbers) (numberPaint.measureText("9".repeat(digits(totalLines))) + 3 * pad).toInt() else 0
-        setPadding(gutterWidth + pad, pad, 2 * pad, 8 * pad)
+        // The text scrolls inside the padding, which stays put on screen, so keep it small.
+        setPadding(gutterWidth + pad, pad, 2 * pad, pad)
         invalidate()
     }
 
@@ -118,6 +119,9 @@ class CodeEditText(context: Context, attrs: AttributeSet?) : EditText(context, a
         val first = layout.getLineForVertical(max(0, clip.top - top))
         val last = layout.getLineForVertical(max(0, clip.bottom - top))
         val x = left + gutterWidth - 8 * density
+        // Clip like the text is clipped, so no number shows beside a line that is cut off.
+        canvas.save()
+        canvas.clipRect(left, (scrollY + top).toFloat(), left + gutterWidth, (scrollY + height - totalPaddingBottom).toFloat())
         var number = -1
         for (line in first..last) {
             val start = layout.getLineStart(line)
@@ -126,6 +130,7 @@ class CodeEditText(context: Context, attrs: AttributeSet?) : EditText(context, a
             number = if (number < 0) gutterLines.lineAt(text, start) + 1 else number + 1
             canvas.drawText(number.toString(), x, (top + layout.getLineBaseline(line)).toFloat(), numberPaint)
         }
+        canvas.restore()
     }
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
