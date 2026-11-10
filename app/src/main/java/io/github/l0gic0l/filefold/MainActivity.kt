@@ -1,8 +1,10 @@
 package io.github.l0gic0l.filefold
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -59,12 +61,16 @@ class MainActivity : ComponentActivity() {
 
     private fun requestAllFilesAccess() {
         val appPage = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, "package:$packageName".toUri())
-        try {
-            startActivity(appPage)
-        } catch (_: Exception) {
-            // Some devices only offer the general list of apps.
-            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        val generalList = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+        // Some devices only offer the general list of apps, and stripped-down builds offer neither.
+        for (intent in listOf(appPage, generalList)) {
+            try {
+                startActivity(intent)
+                return
+            } catch (_: ActivityNotFoundException) {
+            }
         }
+        Toast.makeText(this, "Open Settings › Apps › FileFold and allow \"All files access\"", Toast.LENGTH_LONG).show()
     }
 }
 

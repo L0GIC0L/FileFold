@@ -16,12 +16,13 @@
 
         <!--
             resizeableActivity plus the configChanges below let the window grow and shrink
-            when a foldable opens or closes without the activity being recreated, so the
-            current folder, scroll position and any open editor carry straight across.
+            when a foldable opens or closes, or the phone rotates, without the activity being
+            recreated. Density is deliberately left out: if it ever changes, the activity is
+            rebuilt, and everything it needs is kept in the ViewModel and saved state.
         -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density|keyboard|keyboardHidden|navigation"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden|navigation"
             android:exported="true"
             android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">

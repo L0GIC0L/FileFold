@@ -18,7 +18,7 @@ import java.io.File
  */
 class EditorSession(val file: File, val readOnly: Boolean, private val format: TextDocument.Decoded) {
 
-    val state = TextFieldState(format.text)
+    val state = TextFieldState(format.text, initialSelection = TextRange(0))
 
     private var savedText: CharSequence by mutableStateOf(format.text)
 

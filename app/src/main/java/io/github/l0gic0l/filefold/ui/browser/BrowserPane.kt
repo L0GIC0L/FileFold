@@ -206,12 +206,6 @@ private fun DelayedSpinner() {
 private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
     IconButton(onClick = vm::openSearch) { Icon(Icons.Default.Search, "Search this folder") }
     SortMenu(vm)
-    IconButton(onClick = { vm.setGridView(!vm.settings.gridView) }) {
-        Icon(
-            if (vm.settings.gridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
-            if (vm.settings.gridView) "Show as list" else "Show as grid",
-        )
-    }
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "More options") }
@@ -227,6 +221,11 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
                     item("New text file", Icons.AutoMirrored.Filled.NoteAdd) { vm.dialog = BrowserDialog.NewFile }
                     item("Auto-sort into folders…", Icons.Default.AutoAwesome) { vm.dialog = BrowserDialog.AutoSort(File(location.path)) }
                 }
+            }
+            if (vm.settings.gridView) {
+                item("Show as list", Icons.AutoMirrored.Filled.ViewList) { vm.setGridView(false) }
+            } else {
+                item("Show as grid", Icons.Default.GridView) { vm.setGridView(true) }
             }
             item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
             item("Refresh", Icons.Default.Refresh) { vm.refresh() }

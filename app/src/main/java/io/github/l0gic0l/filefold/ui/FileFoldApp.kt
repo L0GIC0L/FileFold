@@ -2,6 +2,7 @@ package io.github.l0gic0l.filefold.ui
 
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,9 +34,11 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDragHandle
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.WindowAdaptiveInfo
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.MutableThreePaneScaffoldState
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
@@ -55,6 +58,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.window.core.layout.WindowSizeClass
+import androidx.window.core.layout.computeWindowSizeClass
 import io.github.l0gic0l.filefold.ui.browser.BrowserDialogs
 import io.github.l0gic0l.filefold.ui.browser.BrowserPane
 import io.github.l0gic0l.filefold.ui.browser.BrowserViewModel
@@ -72,10 +76,20 @@ import kotlinx.coroutines.launch
  * Everything is driven by one ViewModel, so folding or unfolding mid-task
  * keeps the current folder, selection and any unsaved edits.
  */
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun FileFoldApp(vm: BrowserViewModel = viewModel()) {
-    val adaptiveInfo = currentWindowAdaptiveInfoV2()
+    // Size the layout from the space we are actually given. The window size Compose reports
+    // can lag a fold or unfold, which would leave the app stuck in the old layout.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val posture = currentWindowAdaptiveInfoV2().windowPosture
+        val sizeClass = WindowSizeClass.BREAKPOINTS_V2.computeWindowSizeClass(maxWidth.value, maxHeight.value)
+        AdaptiveApp(vm, WindowAdaptiveInfo(sizeClass, posture))
+    }
+}
+
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) {
     val wide = adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND)
     // Two panes from medium width up, which covers the inner screen of book-style foldables.
     // The default hinge policy keeps both panes clear of a separating hinge.
@@ -84,6 +98,13 @@ fun FileFoldApp(vm: BrowserViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+
+    // When the device folds or unfolds, the navigator works out the new pane layout but
+    // only moves its displayed state on the next navigation. Move it straight away.
+    LaunchedEffect(directive) {
+        val state = navigator.scaffoldState as? MutableThreePaneScaffoldState ?: return@LaunchedEffect
+        if (state.targetState != navigator.scaffoldValue) state.snapTo(navigator.scaffoldValue)
+    }
 
     LifecycleResumeEffect(Unit) {
         vm.onResume()
