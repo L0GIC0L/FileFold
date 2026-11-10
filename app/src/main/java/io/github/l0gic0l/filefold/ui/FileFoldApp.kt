@@ -165,26 +165,30 @@ private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) 
         )
     }
 
+    // The panes must stay at one place in the composition whatever the width: they share the
+    // navigator's state, and rebuilding them elsewhere (e.g. on rotating to landscape, which
+    // brings in the rail) would attach that state to two scaffolds at once and crash.
+    LaunchedEffect(wide) { if (wide) drawerState.snapTo(DrawerValue.Closed) }
     Box(Modifier.fillMaxSize()) {
-        if (wide) {
-            Row(Modifier.fillMaxSize()) {
-                PlacesRail(vm)
-                Box(Modifier.weight(1f)) { panes(false) }
-            }
-        } else {
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                // Only swipe-to-close; opening is from the menu button so edge swipes stay with system back.
-                gesturesEnabled = drawerState.isOpen,
-                drawerContent = {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            // Only swipe-to-close; opening is from the menu button so edge swipes stay with system back.
+            gesturesEnabled = !wide && drawerState.isOpen,
+            drawerContent = {
+                if (!wide) {
                     ModalDrawerSheet {
                         PlacesDrawer(vm) { place ->
                             vm.openPlace(place.path)
                             scope.launch { drawerState.close() }
                         }
                     }
-                },
-            ) { panes(true) }
+                }
+            },
+        ) {
+            Row(Modifier.fillMaxSize()) {
+                if (wide) PlacesRail(vm)
+                Box(Modifier.weight(1f)) { panes(!wide) }
+            }
         }
 
         SnackbarHost(
