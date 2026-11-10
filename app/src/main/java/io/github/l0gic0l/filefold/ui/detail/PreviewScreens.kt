@@ -174,7 +174,7 @@ fun InfoScreen(vm: BrowserViewModel, target: DetailTarget, info: FileInfo, showB
 
 @Composable
 private fun InfoHeader(info: FileInfo) {
-    KindBadge(FileTypes.kindOf(info.name, info.isDirectory), info.name, size = 88.dp)
+    KindBadge(FileTypes.kindOf(info.name, info.isDirectory), size = 88.dp)
     Spacer(Modifier.height(12.dp))
     Text(info.name, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
     Text(info.typeLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

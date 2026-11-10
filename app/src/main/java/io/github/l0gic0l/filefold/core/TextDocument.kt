@@ -14,8 +14,11 @@ import java.nio.charset.CodingErrorAction
  */
 object TextDocument {
 
-    /** Largest file the editor opens. Bigger files make typing sluggish on a phone. */
-    const val EDIT_LIMIT: Long = 2L * 1024 * 1024
+    /**
+     * Largest file the editor opens. The editor lays text out incrementally, so typing stays
+     * quick well past this; the limit is about the one-off cost of opening and memory.
+     */
+    const val EDIT_LIMIT: Long = 5L * 1024 * 1024
 
     data class Decoded(
         /** The text with line endings normalised to "\n". */

@@ -46,6 +46,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
@@ -87,6 +88,8 @@ dependencies {
     implementation(libs.commons.compress)
     implementation(libs.xz)
     implementation(libs.junrar)
+    // Google's Material colour maths (Kotlin port): tonal palettes and harmonised colours.
+    implementation(libs.material.color.utilities)
 
     testImplementation(libs.junit)
 }

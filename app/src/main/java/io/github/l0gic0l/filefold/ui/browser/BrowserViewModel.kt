@@ -610,12 +610,14 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         extract(dialog.archive, dialog.format, password, dest, dialog.entries, dialog.baseDir)
     }
 
-    fun planAutoSort(mode: AutoSortMode) {
+    /** Works out an auto-sort with the saved settings, using [mode] and [moveFolders] for this run. */
+    fun planAutoSort(mode: AutoSortMode, moveFolders: Boolean) {
         val dir = currentDir() ?: return
+        val config = settings.autoSort.copy(mode = mode, moveFolders = moveFolders)
         viewModelScope.launch {
-            val plan = withContext(Dispatchers.IO) { AutoSorter.plan(dir, mode, settings.showHidden) }
+            val plan = withContext(Dispatchers.IO) { AutoSorter.plan(dir, config) }
             dialog = if (plan.moves.isEmpty()) {
-                message("Nothing to sort: there are no loose files here")
+                message("Nothing to sort here")
                 null
             } else {
                 BrowserDialog.AutoSortPreview(plan)
@@ -627,10 +629,10 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         runOperation("Sorting") { progress ->
             val result = AutoSorter.execute(plan, progress)
             withContext(Dispatchers.Main) {
-                message("Sorted ${plural(result.moved.size, "file")} into ${plural(plan.summary.size, "folder")}", "Undo") {
+                message("Sorted ${plural(result.moved.size, "item")} into ${plural(plan.summary.size, "folder")}", "Undo") {
                     viewModelScope.launch {
                         val restored = withContext(Dispatchers.IO) { AutoSorter.undo(result) }
-                        message("Restored ${plural(restored, "file")}")
+                        message("Restored ${plural(restored, "item")}")
                         load()
                     }
                 }
@@ -814,11 +816,11 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         if (FileTypes.isPreviewableImage(file.name)) {
             return DetailContent.Image(file, info().info)
         }
-        val textCandidate = forceText || kind == FileKind.TEXT || kind == FileKind.OTHER
+        val textCandidate = forceText || FileTypes.isText(file.name) || kind == FileKind.OTHER
         if (!textCandidate || browsable) return info()
         if (file.length() > TextDocument.EDIT_LIMIT) {
             val note = "This file is ${Format.size(file.length())}, too large for the built-in editor (limit ${Format.size(TextDocument.EDIT_LIMIT)})."
-            return info(note = note.takeIf { kind == FileKind.TEXT })
+            return info(note = note.takeIf { FileTypes.isText(file.name) })
         }
         val bytes = file.readBytes()
         if (!forceText && TextDocument.looksBinary(bytes)) {
@@ -862,7 +864,8 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
             add(InfoRow("Modified", Format.date(item.modified)))
             add(InfoRow("In archive", "${session.file.name} › ${target.entryPath}"))
         }
-        val previewable = FileTypes.isPreviewableImage(item.name) || FileTypes.kindOf(item.name) in setOf(FileKind.TEXT, FileKind.OTHER) || forceText
+        val previewable = FileTypes.isPreviewableImage(item.name) || FileTypes.isText(item.name) ||
+            FileTypes.kindOf(item.name) == FileKind.OTHER || forceText
         if (!previewable || item.size > PREVIEW_LIMIT) {
             return DetailContent.Info(
                 FileInfo(item.name, false, FileTypes.describe(item.name, false), rows, null, false,

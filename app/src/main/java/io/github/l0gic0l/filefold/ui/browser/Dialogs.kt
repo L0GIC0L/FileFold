@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -44,7 +45,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import io.github.l0gic0l.filefold.archive.ArchiveFormat
+import io.github.l0gic0l.filefold.core.AutoSortConfig
 import io.github.l0gic0l.filefold.core.AutoSortMode
+import io.github.l0gic0l.filefold.core.AutoSorter
 import io.github.l0gic0l.filefold.core.FileOps
 import io.github.l0gic0l.filefold.util.Format
 
@@ -77,19 +80,27 @@ fun BrowserDialogs(vm: BrowserViewModel) {
         is BrowserDialog.Compress -> CompressDialog(d, close) { name, format -> vm.compress(d.files, name, format); close() }
         is BrowserDialog.Extract -> ExtractDialog(d, close) { folder -> vm.confirmExtract(d, folder); close() }
         is BrowserDialog.Password -> PasswordDialog(d)
-        is BrowserDialog.AutoSort -> AutoSortDialog(close) { mode -> vm.planAutoSort(mode) }
+        is BrowserDialog.AutoSort -> AutoSortDialog(vm.settings.autoSort, close) { mode, moveFolders ->
+            vm.planAutoSort(mode, moveFolders)
+        }
         is BrowserDialog.AutoSortPreview -> AlertDialog(
             onDismissRequest = close,
-            title = { Text("Sort ${d.plan.moves.size} files?") },
+            title = { Text("Sort ${d.plan.moves.size} ${if (d.plan.moves.size == 1) "item" else "items"}?") },
             text = {
                 Column {
-                    Text("Loose files in \"${d.plan.dir.name}\" will be moved into these folders:")
+                    Text("Items in \"${d.plan.dir.name}\" will be moved into these folders:")
                     Spacer(Modifier.padding(4.dp))
                     LazyColumn(Modifier.heightIn(max = 260.dp)) {
-                        items(d.plan.summary) { (folder, count) ->
+                        items(d.plan.summary) { row ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                Text(folder, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                                Text("$count", color = MaterialTheme.colorScheme.primary)
+                                Text(row.folder, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    listOfNotNull(
+                                        row.files.takeIf { it > 0 }?.let { "$it ${if (it == 1) "file" else "files"}" },
+                                        row.folders.takeIf { it > 0 }?.let { "$it ${if (it == 1) "folder" else "folders"}" },
+                                    ).joinToString(", "),
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
                             }
                         }
                     }
@@ -286,14 +297,16 @@ private fun PasswordDialog(dialog: BrowserDialog.Password) {
 }
 
 @Composable
-private fun AutoSortDialog(onDismiss: () -> Unit, onConfirm: (AutoSortMode) -> Unit) {
-    var mode by remember { mutableStateOf(AutoSortMode.BY_TYPE) }
+private fun AutoSortDialog(config: AutoSortConfig, onDismiss: () -> Unit, onConfirm: (AutoSortMode, Boolean) -> Unit) {
+    var mode by remember { mutableStateOf(config.mode) }
+    var moveFolders by remember { mutableStateOf(config.moveFolders) }
+    val foldersTarget = AutoSorter.cleanPath(config.foldersTarget) ?: "Misc"
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Auto-sort into folders") },
         text = {
             Column {
-                Text("Tidy this folder by moving its loose files into sub-folders.")
+                Text("Tidy this folder by moving its loose files into sub-folders. Folder names and which types to sort are in Settings.")
                 Spacer(Modifier.padding(4.dp))
                 AutoSortMode.entries.forEach { option ->
                     Row(
@@ -311,9 +324,18 @@ private fun AutoSortDialog(onDismiss: () -> Unit, onConfirm: (AutoSortMode) -> U
                         }
                     }
                 }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().selectable(moveFolders, role = Role.Checkbox) { moveFolders = !moveFolders },
+                ) {
+                    Checkbox(checked = moveFolders, onCheckedChange = null)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Also move folders into \"$foldersTarget\"")
+                }
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(mode) }) { Text("Preview") } },
+        confirmButton = { TextButton(onClick = { onConfirm(mode, moveFolders) }) { Text("Preview") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -52,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -64,6 +67,7 @@ import io.github.l0gic0l.filefold.ui.browser.BrowserPane
 import io.github.l0gic0l.filefold.ui.browser.BrowserViewModel
 import io.github.l0gic0l.filefold.ui.browser.Location
 import io.github.l0gic0l.filefold.ui.browser.OperationDialog
+import io.github.l0gic0l.filefold.ui.browser.openSettings
 import io.github.l0gic0l.filefold.ui.detail.DetailPane
 import io.github.l0gic0l.filefold.util.Place
 import kotlinx.coroutines.launch
@@ -232,6 +236,14 @@ private fun PlacesDrawer(vm: BrowserViewModel, onClick: (Place) -> Unit) {
             HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             shortcuts.forEach { DrawerItem(it, it.path == current, onClick) }
         }
+        HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        val context = LocalContext.current
+        NavigationDrawerItem(
+            label = { Text("Settings") },
+            icon = { Icon(Icons.Default.Settings, null) },
+            selected = false,
+            onClick = { openSettings(context) },
+        )
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -269,6 +281,14 @@ private fun PlacesRail(vm: BrowserViewModel) {
                     },
                 )
             }
+            Spacer(Modifier.height(8.dp))
+            val context = LocalContext.current
+            NavigationRailItem(
+                selected = false,
+                onClick = { openSettings(context) },
+                icon = { Icon(Icons.Default.Settings, null) },
+                label = { Text("Settings") },
+            )
         }
     }
 }

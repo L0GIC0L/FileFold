@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import io.github.l0gic0l.filefold.data.rememberAppSettings
 import io.github.l0gic0l.filefold.ui.FileFoldApp
 import io.github.l0gic0l.filefold.ui.theme.FileFoldTheme
 import io.github.l0gic0l.filefold.util.Storage
@@ -45,7 +46,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            FileFoldTheme {
+            // Nothing is drawn for the instant before settings are read, so the theme never flashes.
+            val settings = rememberAppSettings() ?: return@setContent
+            FileFoldTheme(settings.theme, settings.iconColors) {
                 var granted by remember { mutableStateOf(Storage.hasAllFilesAccess()) }
                 // Re-check every time we come back, e.g. from the system settings page.
                 LifecycleResumeEffect(Unit) {

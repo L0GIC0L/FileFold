@@ -12,6 +12,7 @@ commonsCompress = "1.28.0"
 xz = "1.12"
 junrar = "8.1.2"
 junit = "4.13.2"
+materialColorUtilities = "5.0.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -37,6 +38,7 @@ coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" 
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
 xz = { module = "org.tukaani:xz", version.ref = "xz" }
 junrar = { module = "com.github.junrar:junrar", version.ref = "junrar" }
+material-color-utilities = { module = "com.materialkolor:material-color-utilities", version.ref = "materialColorUtilities" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
 

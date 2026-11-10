@@ -1,5 +1,7 @@
 package io.github.l0gic0l.filefold.ui.browser
 
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
@@ -42,6 +44,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Unarchive
@@ -78,6 +81,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -85,6 +89,7 @@ import io.github.l0gic0l.filefold.archive.ArchiveFormat
 import io.github.l0gic0l.filefold.core.FileItem
 import io.github.l0gic0l.filefold.core.SortBy
 import io.github.l0gic0l.filefold.ui.detail.DetailTarget
+import io.github.l0gic0l.filefold.ui.settings.SettingsActivity
 import java.io.File
 
 /** The file list: top bar, tabs, breadcrumbs, contents and the paste bar. */
@@ -138,8 +143,12 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
     }
 }
 
+/** Opens the settings screen. */
+fun openSettings(context: Context) = context.startActivity(Intent(context, SettingsActivity::class.java))
+
 @Composable
 private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
+    val context = LocalContext.current
     IconButton(onClick = vm::openSearch) { Icon(Icons.Default.Search, "Search this folder") }
     SortMenu(vm)
     var open by remember { mutableStateOf(false) }
@@ -166,6 +175,7 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
             item("New tab", Icons.Default.Tab) { vm.newTab() }
             item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
             item("Refresh", Icons.Default.Refresh) { vm.refresh() }
+            item("Settings", Icons.Default.Settings) { openSettings(context) }
             if (!inArchive) {
                 HorizontalDivider()
                 DropdownMenuItem(

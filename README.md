@@ -22,6 +22,22 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
 - Storage locations: internal storage, any SD card or USB drive, and the
   standard folders (Downloads, Documents, Pictures, Camera, Music, Movies).
 - Colours follow your wallpaper (Material You), in light and dark theme.
+- 27 file types each get their own icon and colour: images, design files,
+  video, audio, PDF, documents, spreadsheets, presentations, e-books, text,
+  source code, web files, data and config, subtitles, archives, disk images,
+  Android apps, programs, fonts, databases, contacts, calendars, 3D models,
+  torrents, and keys and certificates.
+
+**Settings**
+- Theme: light, dark or follow the system, with an optional pure black dark
+  theme for OLED screens.
+- Colours: from your wallpaper (Material You, Android 12+), or pick a colour and
+  a style (Tonal, Vibrant, Expressive, Faithful, Neutral, Monochrome). A picked
+  colour is turned into a full Material 3 scheme with Google's own colour
+  algorithm, so contrast stays right in light and dark.
+- File icon colours: change the colour of any file type, and choose whether
+  they blend toward your theme colour (Material colour harmonisation).
+- Browsing, editor and auto-sort options.
 
 **Sorting**
 - Sort by name, date, size or type, ascending or descending, with folders
@@ -29,9 +45,14 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
 - Names sort naturally, so `file2` comes before `file10`.
 - Your choice is saved and applied automatically to every folder you open.
 - **Auto-sort into folders** tidies a messy folder (Downloads, say). It moves
-  loose files into `Images`, `Videos`, `Audio`, `Documents`, `Archives`,
-  `Apps` and `Other`, or into one folder per month. You see a preview first,
-  nothing is ever overwritten, and one tap on **Undo** puts everything back.
+  loose files into `Images`, `Videos`, `Audio`, `Documents`, `Code`,
+  `Archives`, `Apps` and `Other`, or into one folder per month. You see a
+  preview first, nothing is ever overwritten, and one tap on **Undo** puts
+  everything back.
+- In Settings you can switch off any group (its files stay where they are),
+  rename its folder, nest it (`Sorted/Images`), or send two groups to the same
+  folder. Auto-sort can also tidy sub-folders into `Misc` or a folder you name.
+  The folders it sorts into are never moved themselves.
 
 **File operations**
 - Copy, move, delete, rename, share, new folder and new text file.
@@ -67,7 +88,9 @@ Creating RAR files needs WinRAR's proprietary compressor, so no free app can
 do it.
 
 **Text editor**
-- Opens source code, config, log and other plain text files up to 2 MB. Files
+- Opens source code, config, log and other plain text files up to 5 MB, and
+  stays quick with big files: only the paragraph you edit is re-measured and
+  only the lines on screen are drawn. Files
   without an extension, such as `README` or `Makefile`, open too, as long as
   they hold text.
 - Undo and redo, find and replace (match case, replace all), word wrap, line
@@ -143,7 +166,7 @@ archive work uses Apache Commons Compress, XZ for Java, and junrar.
 
 - Password-protected ZIP files are listed but cannot be extracted. Commons
   Compress does not support ZIP encryption.
-- Files over 2 MB are too large for the editor. They open in another app instead.
+- Files over 5 MB are too large for the editor. They open in another app instead.
 - Archives are read-only: you can create new ones, but not add files to an
   existing archive.
 
