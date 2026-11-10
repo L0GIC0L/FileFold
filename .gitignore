@@ -27,6 +27,8 @@ render.experimental.xml
 # Keystore files
 *.jks
 *.keystore
+# ...except the development key, which is meant to be shared (see app/build.gradle.kts).
+!app/signing/dev.keystore
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json
