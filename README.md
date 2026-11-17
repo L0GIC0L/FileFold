@@ -8,8 +8,21 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
 ## Features
 
 **Browsing**
-- List and grid views, with thumbnails for photos.
-- Breadcrumb path bar, per-folder search, and pull to refresh.
+- List and grid views, with thumbnails for photos and videos.
+- Breadcrumb path bar and pull to refresh.
+- **Search** looks through the current folder and everything below it, and
+  lists matches as it finds them. Type words in any order, or a pattern such
+  as `IMG_*.jpg`. Chips narrow it to a kind of file (images, videos, audio,
+  documents, code, archives, apps), to files changed in the last 7 days, or
+  to files over 50 MB. A chip on its own works too: tap **Images** at the top
+  of storage to see every picture. It also searches inside an open archive.
+- **Recent files** in the drawer lists what changed in the last week, newest
+  first.
+- **Favourites:** pin any folder to the drawer from the menu.
+- **Storage usage** (in the menu) adds up what each sub-folder holds, puts
+  the biggest first with a bar for its share, and shows how full the volume
+  is. It stays on as you move between folders. The drawer shows free space
+  for each volume.
 - **Tabs:** keep several folders or archives open at once. Use **New tab** in
   the menu, or select a folder and choose **Open in new tab**. Each tab
   remembers its own scroll positions, and your tabs are still there next time
@@ -87,6 +100,41 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
 Creating RAR files needs WinRAR's proprietary compressor, so no free app can
 do it.
 
+**Trash**
+- Deleting moves items to the trash, and a snackbar offers **Undo**. The
+  trash is in the drawer: restore items to where they were, delete them for
+  good, or empty it. Items are removed automatically after 30 days.
+- Moving to the trash is instant, because each storage volume has its own
+  trash folder (`.FileFoldTrash`, hidden, and ignored by gallery apps).
+- The delete dialog can skip the trash, and Settings can turn it off.
+
+**Batch rename**
+- Select several items and choose **Rename all**. The new name is a template:
+  `{name}` is the old name, `{n}` a counter and `{date}` the day the file was
+  last changed, so `Holiday {n}` gives `Holiday 01.jpg`, `Holiday 02.jpg`.
+  Text can also be found and replaced in the old names. Extensions are kept,
+  a preview shows the result, and the rename can be undone.
+
+**Viewers**
+- **PDF:** pages in a scrolling column with zoom, drawn by Android's own
+  renderer.
+- **Audio and video:** a built-in player with seek and 10-second skip. Formats
+  Android cannot play offer **Open with** instead.
+- **Pictures:** pinch and double-tap zoom, and arrows to step through the
+  other pictures in the folder.
+- **Bytes:** any file can be shown as a hex dump, however large.
+- **Checksums:** CRC32, MD5, SHA-1 and SHA-256 of a file, with a box to paste
+  an expected value and see whether it matches.
+- **Details** include picture dimensions, audio and video length, resolution
+  and tags, and for an APK the app's name, package, version and the Android
+  version it needs, with an **Install** button.
+- PDFs, audio and video inside an archive preview without extracting it.
+
+**Keyboard shortcuts** (hardware keyboard): **Ctrl+A** select all, **Ctrl+C**
+/ **X** / **V** copy, cut, paste, **Ctrl+F** search, **Ctrl+T** / **W** new
+and close tab, **Ctrl+N** new folder, **Ctrl+H** hidden files, **Delete**,
+**F2** rename, **F5** refresh.
+
 **Text editor**
 - Opens source code, config, log and other plain text files up to 5 MB, and
   stays quick with big files: only the paragraph you edit is re-measured and
@@ -147,14 +195,15 @@ permission for an app to manage files outside its own folder.
 
 ```
 app/src/main/java/io/github/l0gic0l/filefold/
-├── core/       File operations, sorting, auto-sort, text encoding. Plain Kotlin, unit tested.
+├── core/       File operations, sorting, search, trash, batch rename, checksums, auto-sort,
+│               text encoding. Plain Kotlin, unit tested.
 ├── archive/    Archive formats, reading/writing/extracting, and the in-archive folder tree.
 ├── data/       Saved settings (DataStore).
 ├── util/       Formatting, storage volumes, handing files to other apps.
 └── ui/
     ├── FileFoldApp.kt   Adaptive layout: panes, drawer or rail, hinge handling.
     ├── browser/         File list, dialogs, and the ViewModel holding all browsing state.
-    ├── detail/          Text editor, image viewer, file details.
+    ├── detail/          Text editor, image, PDF, media and hex viewers, file details.
     └── components/      File icons and the tabletop posture layout.
 ```
 
@@ -169,6 +218,10 @@ archive work uses Apache Commons Compress, XZ for Java, and junrar.
 - Files over 5 MB are too large for the editor. They open in another app instead.
 - Archives are read-only: you can create new ones, but not add files to an
   existing archive.
+- The player handles what Android can decode (MP4, MKV, WebM, MP3, FLAC, OGG,
+  WAV and similar). Other formats open in another app.
+- Password-protected PDFs open in another app.
+- A search stops at 2,000 matches and asks you to narrow it down.
 
 ## Licence
 

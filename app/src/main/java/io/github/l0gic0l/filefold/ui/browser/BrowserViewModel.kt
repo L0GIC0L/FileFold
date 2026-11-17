@@ -13,6 +13,11 @@ import io.github.l0gic0l.filefold.archive.ArchivePasswordException
 import io.github.l0gic0l.filefold.archive.Archives
 import io.github.l0gic0l.filefold.core.AutoSortMode
 import io.github.l0gic0l.filefold.core.AutoSorter
+import io.github.l0gic0l.filefold.core.BatchRename
+import io.github.l0gic0l.filefold.core.FileSearch
+import io.github.l0gic0l.filefold.core.NaturalOrder
+import io.github.l0gic0l.filefold.core.SearchQuery
+import io.github.l0gic0l.filefold.core.Trash
 import io.github.l0gic0l.filefold.core.FileItem
 import io.github.l0gic0l.filefold.core.FileKind
 import io.github.l0gic0l.filefold.core.FileOps
@@ -30,12 +35,14 @@ import io.github.l0gic0l.filefold.ui.detail.FileInfo
 import io.github.l0gic0l.filefold.ui.detail.InfoRow
 import io.github.l0gic0l.filefold.util.Format
 import io.github.l0gic0l.filefold.util.Launch
+import io.github.l0gic0l.filefold.util.MediaInfo
 import io.github.l0gic0l.filefold.util.Place
 import io.github.l0gic0l.filefold.util.Storage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -88,9 +95,38 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     var error by mutableStateOf<String?>(null)
         private set
 
-    /** Filters the current folder by name; null when search is closed. */
-    var search by mutableStateOf<String?>(null)
+    /** What is being searched for in this folder and everything below it; null when search is closed. */
+    var search by mutableStateOf<SearchQuery?>(null)
         private set
+
+    /** True while a search is still walking the folders. */
+    var searching by mutableStateOf(false)
+        private set
+
+    /** True when a search stopped at [FileSearch.MAX_RESULTS]. */
+    var searchTruncated by mutableStateOf(false)
+        private set
+    private var searchResults: List<FileItem> = emptyList()
+    private var searchJob: Job? = null
+    private var searchGeneration = 0
+
+    /** Storage usage view: folders show the size of everything inside them and the biggest come first. */
+    var sizeView by mutableStateOf(false)
+        private set
+
+    /** True while folder sizes are still being added up. */
+    var sizing by mutableStateOf(false)
+        private set
+
+    /** Bytes used by everything listed in the storage usage view. */
+    var sizeViewTotal by mutableLongStateOf(0L)
+        private set
+    private var folderSizes: Map<String, Long> = emptyMap()
+    private var sizeJob: Job? = null
+
+    /** What is in the trash, by where each item sits now. */
+    @Volatile
+    private var trashEntries: Map<String, Trash.Entry> = emptyMap()
 
     var selection by mutableStateOf<Set<String>>(emptySet())
         private set
@@ -134,7 +170,14 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     private var detailJob: Job? = null
 
     init {
-        viewModelScope.launch(Dispatchers.IO) { previewCache.deleteRecursively() }
+        viewModelScope.launch(Dispatchers.IO) {
+            previewCache.deleteRecursively()
+            // Items that have sat in the trash for a month are removed for good.
+            try {
+                Trash.purgeOlderThan(volumeRoots(), System.currentTimeMillis() - Trash.KEEP_DAYS * 86_400_000L)
+            } catch (_: Exception) {
+            }
+        }
         viewModelScope.launch {
             restoreTabs()
             var first = true
@@ -166,7 +209,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     private fun show(to: Location) {
         location = to
         selection = emptySet()
-        search = null
+        resetSearch()
         error = null
         // Never the previous folder's files: either this folder's last listing or nothing.
         rawItems = listingCache[to.key].orEmpty()
@@ -223,6 +266,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     fun tabLabel(loc: Location): String = when (loc) {
         is Location.Disk -> volumes.firstOrNull { it.path == loc.path }?.label ?: File(loc.path).name.ifEmpty { "/" }
         is Location.InArchive -> if (loc.dir.isEmpty()) File(loc.archivePath).name else ArchiveIndex.nameOf(loc.dir)
+        Location.Trash -> "Trash"
     }
 
     private fun persistTabs() {
@@ -235,7 +279,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun restoreTabs() {
         val saved = settingsRepo.savedTabs.first()
         val restored = withContext(Dispatchers.IO) {
-            saved.tabs.mapNotNull(Location::decode).filter { File(it.diskPath).exists() }
+            saved.tabs.mapNotNull(Location::decode).filter { it is Location.Trash || File(it.diskPath).exists() }
         }
         if (restored.isEmpty()) return
         tabs = restored.map { BrowserTab(nextTabId++, it) }
@@ -245,6 +289,27 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openPlace(path: String) = navigate(Location.Disk(path))
+
+    fun openTrash() = navigate(Location.Trash)
+
+    /** Everything changed in the last few days, anywhere on internal storage, newest first. */
+    fun openRecent() {
+        navigate(Location.Disk(Storage.primaryRoot.absolutePath))
+        search = SearchQuery(recent = true)
+        runSearch()
+    }
+
+    // ------------------------------------------------------------ favourites
+
+    fun isFavorite(path: String): Boolean = path in settings.favorites
+
+    fun toggleFavorite(path: String) {
+        val favorites = settings.favorites
+        val pinned = path !in favorites
+        viewModelScope.launch { settingsRepo.setFavorites(if (pinned) favorites + path else favorites - path) }
+        message(if (pinned) "Added \"${File(path).name}\" to favourites" else "Removed \"${File(path).name}\" from favourites")
+        clearSelection()
+    }
 
     /** Called when the app returns to the foreground: storage may have been plugged in and files changed elsewhere. */
     fun onResume() {
@@ -267,7 +332,13 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
             val root = Storage.volumeRootOf(volumes, location.path)
             if (root == null || location.path == root) null else File(location.path).parent?.let { Location.Disk(it) }
         }
+        // Leaving the trash goes back to the top of internal storage.
+        Location.Trash -> Location.Disk(Storage.primaryRoot.absolutePath)
     }
+
+    private fun volumeRoots(): List<File> = volumes.map { File(it.path) }
+
+    private fun volumeRootOf(file: File): File? = Storage.volumeRootOf(volumes, file.absolutePath)?.let(::File)
 
     val canNavigateUp: Boolean get() = parentOf(location) != null
 
@@ -282,6 +353,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun breadcrumbs(loc: Location = location): List<Crumb> {
+        if (loc is Location.Trash) return listOf(Crumb("Trash", loc))
         val crumbs = ArrayList<Crumb>()
         val diskPath = loc.diskPath
         val root = Storage.volumeRootOf(volumes, diskPath)
@@ -322,6 +394,17 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
             is Location.InArchive ->
                 if (item.isDirectory) navigate(Location.InArchive(loc.archivePath, item.path))
                 else showDetail(DetailTarget.Entry(loc.archivePath, item.path))
+            // Trashed items can be looked at, but folders are only opened once they are restored.
+            Location.Trash -> showDetail(DetailTarget.Disk(item.path))
+        }
+    }
+
+    /** Leaves a search to show the folder that holds [item]. */
+    fun showInFolder(item: FileItem) {
+        when (val loc = location) {
+            is Location.Disk -> File(item.path).parent?.let { navigate(Location.Disk(it)) }
+            is Location.InArchive -> navigate(Location.InArchive(loc.archivePath, ArchiveIndex.parentOf(item.path)))
+            Location.Trash -> Unit
         }
     }
 
@@ -330,7 +413,10 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ loading
 
-    fun refresh() = load()
+    fun refresh() {
+        folderSizes = emptyMap()
+        load()
+    }
 
     private fun load() {
         loadJob?.cancel()
@@ -352,6 +438,14 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                             else -> session.index.list(target.dir)
                         }
                     }
+                    Location.Trash -> {
+                        val entries = withContext(Dispatchers.IO) { Trash.list(volumeRoots()) }
+                        trashEntries = entries.associateBy { it.file.absolutePath }
+                        withContext(Dispatchers.IO) {
+                            // Shown under the name each item had, dated by when it was deleted.
+                            entries.map { FileOps.toItem(it.file).copy(name = it.originalName, modified = it.deletedAt) }
+                        }
+                    }
                 }
                 error = problem
                 if (problem == null) listingCache[target.key] = rawItems
@@ -365,6 +459,8 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 loading = false
             }
             applyFilterAndSort()
+            if (search?.isActive == true) runSearch()
+            computeSizes()
             prefetchParent(target)
         }
     }
@@ -377,6 +473,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
             when (parent) {
                 is Location.Disk -> withContext(Dispatchers.IO) { FileOps.list(File(parent.path), settings.showHidden) }
                 is Location.InArchive -> archive?.takeIf { it.file.path == parent.archivePath }?.index?.list(parent.dir)
+                Location.Trash -> null
             }
         } catch (e: IOException) {
             null
@@ -418,36 +515,172 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyFilterAndSort() {
-        val query = search?.trim().orEmpty()
-        items = rawItems
-            .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
-            .sortedWith(settings.sort.comparator())
+        val query = search?.takeIf { it.isActive }
+        val usage = sizeView && query == null && location is Location.Disk
+        val source = when {
+            query != null -> searchResults
+            usage -> rawItems.map { if (it.isDirectory) it.copy(size = folderSizes[it.path] ?: 0) else it }
+            else -> rawItems
+        }
+        val byName = Comparator<FileItem> { a, b -> NaturalOrder.compare(a.name, b.name) }
+        val order = when {
+            query?.recent == true || location is Location.Trash -> compareByDescending<FileItem> { it.modified }.then(byName)
+            query?.large == true || usage -> compareByDescending<FileItem> { it.size }.then(byName)
+            else -> settings.sort.comparator()
+        }
+        items = source.sortedWith(order)
+        sizeViewTotal = if (usage) source.sumOf { it.size } else 0L
         // Drop selected paths that are no longer listed, e.g. after a delete.
-        val present = rawItems.mapTo(HashSet()) { it.path }
+        val present = source.mapTo(HashSet()) { it.path }
         if (selection.any { it !in present }) selection = selection.filterTo(HashSet()) { it in present }
     }
 
     // ------------------------------------------------------------ search, sort, view
 
     fun openSearch() {
-        search = ""
+        search = SearchQuery()
     }
 
-    fun updateSearch(query: String) {
+    fun updateSearch(query: SearchQuery) {
+        val typing = query.text != search?.text
         search = query
-        applyFilterAndSort()
+        runSearch(debounce = typing)
     }
 
     fun closeSearch() {
-        search = null
+        resetSearch()
         applyFilterAndSort()
     }
+
+    private fun resetSearch() {
+        searchJob?.cancel()
+        searchGeneration++
+        search = null
+        searching = false
+        searchTruncated = false
+        searchResults = emptyList()
+    }
+
+    /**
+     * Searches the current folder and everything below it. Matches are shown as they are
+     * found. While typing, what is already listed is narrowed at once and the walk starts
+     * after a short pause, so each keystroke does not start a search of its own.
+     */
+    private fun runSearch(debounce: Boolean = false) {
+        searchJob?.cancel()
+        val generation = ++searchGeneration
+        val query = search?.takeIf { it.isActive }
+        searchTruncated = false
+        if (query == null) {
+            searching = false
+            searchResults = emptyList()
+            applyFilterAndSort()
+            return
+        }
+        val now = System.currentTimeMillis()
+        fun matches(item: FileItem) = query.matches(item.name, item.isDirectory, item.size, item.modified, now)
+        searchResults = searchResults.filter(::matches)
+        applyFilterAndSort()
+        searching = true
+        val target = location
+        searchJob = viewModelScope.launch {
+            if (debounce) delay(250)
+            // Only touched on the main thread; batches from the walk are posted here in order.
+            val found = ArrayList<FileItem>()
+            fun deliver(batch: List<FileItem>) {
+                if (generation != searchGeneration) return
+                found += batch
+                searchResults = found.toList()
+                applyFilterAndSort()
+            }
+            try {
+                when (target) {
+                    is Location.Disk -> {
+                        val showHidden = settings.showHidden
+                        val truncated = withContext(Dispatchers.IO) {
+                            val job = coroutineContext.job
+                            FileSearch.search(File(target.path), query, showHidden, now, Progress(isActive = { job.isActive })) { batch ->
+                                viewModelScope.launch { deliver(batch) }
+                            }
+                        }
+                        if (generation == searchGeneration) searchTruncated = truncated
+                    }
+                    is Location.InArchive -> archive?.takeIf { it.file.path == target.archivePath }?.let { session ->
+                        deliver(session.index.search(target.dir, FileSearch.MAX_RESULTS, ::matches))
+                    }
+                    Location.Trash -> deliver(rawItems.filter(::matches))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A folder that cannot be walked just ends the search with what was found.
+            }
+            if (generation == searchGeneration) {
+                // Replaces the narrowed-down old results, also when nothing at all was found.
+                searchResults = found.toList()
+                searching = false
+                applyFilterAndSort()
+            }
+        }
+    }
+
+    /** Extra text under a file's name: where a search result or a trashed item lives. */
+    fun hintFor(item: FileItem): String? = when (val loc = location) {
+        Location.Trash -> trashEntries[item.path]?.let { "from ${File(it.originalPath).parentFile?.name ?: "/"}" }
+        is Location.Disk -> if (search?.isActive != true) null else {
+            val parent = File(item.path).parent.orEmpty()
+            if (parent == loc.path) null else "in ${parent.removePrefix(loc.path).trimStart('/')}"
+        }
+        is Location.InArchive -> if (search?.isActive != true) null else {
+            val parent = ArchiveIndex.parentOf(item.path)
+            if (parent == loc.dir) null else "in ${parent.removePrefix(loc.dir).trimStart('/')}"
+        }
+    }
+
+    // ------------------------------------------------------------ storage usage
+
+    /** Turns the storage usage view on or off. It stays on while moving between folders. */
+    fun showSizes(on: Boolean) {
+        sizeView = on
+        if (!on) {
+            sizeJob?.cancel()
+            sizing = false
+            folderSizes = emptyMap()
+        }
+        applyFilterAndSort()
+        computeSizes()
+    }
+
+    /** Adds up the folders in the current listing one by one, re-sorting as each size comes in. */
+    private fun computeSizes() {
+        sizeJob?.cancel()
+        sizing = false
+        if (!sizeView || location !is Location.Disk) return
+        val pending = rawItems.filter { it.isDirectory && it.path !in folderSizes }
+        if (pending.isEmpty()) return
+        sizing = true
+        sizeJob = viewModelScope.launch {
+            for (dir in pending) {
+                val size = withContext(Dispatchers.IO) {
+                    val job = coroutineContext.job
+                    FileSearch.folderSize(File(dir.path), Progress(isActive = { job.isActive }))
+                }
+                folderSizes = folderSizes + (dir.path to size)
+                applyFilterAndSort()
+            }
+            sizing = false
+        }
+    }
+
+    /** The storage volume the current folder is on. */
+    val currentVolume: Place? get() = Storage.volumeRootOf(volumes, location.diskPath)?.let { root -> volumes.firstOrNull { it.path == root } }
 
     fun setSort(sort: SortOptions) = viewModelScope.launch { settingsRepo.setSort(sort) }
     fun setShowHidden(value: Boolean) = viewModelScope.launch { settingsRepo.setShowHidden(value) }
     fun setGridView(value: Boolean) = viewModelScope.launch { settingsRepo.setGridView(value) }
     fun setEditorWordWrap(value: Boolean) = viewModelScope.launch { settingsRepo.setEditorWordWrap(value) }
     fun setEditorLineNumbers(value: Boolean) = viewModelScope.launch { settingsRepo.setEditorLineNumbers(value) }
+    fun setUseTrash(value: Boolean) = viewModelScope.launch { settingsRepo.setUseTrash(value) }
     fun setEditorFontSize(value: Float) = viewModelScope.launch { settingsRepo.setEditorFontSize(value.coerceIn(8f, 32f)) }
 
     // ------------------------------------------------------------ selection
@@ -464,6 +697,18 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         selection = emptySet()
     }
 
+    fun invertSelection() {
+        selection = items.mapNotNullTo(HashSet()) { item -> item.path.takeIf { it !in selection } }
+    }
+
+    /** Puts the full path of [item] on the system clipboard. */
+    fun copyPath(item: FileItem) {
+        val clipboardManager = getApplication<Application>().getSystemService(android.content.ClipboardManager::class.java)
+        clipboardManager.setPrimaryClip(android.content.ClipData.newPlainText("Path", item.path))
+        clearSelection()
+        message("Path copied")
+    }
+
     val selectedItems: List<FileItem> get() = items.filter { it.path in selection }
 
     // ------------------------------------------------------------ clipboard
@@ -477,6 +722,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 val session = archive ?: return
                 Clipboard.Entries(session.file, session.format, session.password, selected.map { it.path }, loc.dir)
             }
+            Location.Trash -> return
         }
         clearSelection()
         val verb = when {
@@ -532,16 +778,93 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun delete(items: List<FileItem>) {
+    /** True when deleting from the current folder moves things to the trash rather than removing them. */
+    val deletesToTrash: Boolean
+        get() = settings.useTrash && (location as? Location.Disk)?.let { !Trash.isInTrash(it.path) } == true
+
+    /** Deletes [items]: into the trash when it is in use and [permanently] is not asked for. */
+    fun delete(items: List<FileItem>, permanently: Boolean = false) {
         val files = items.map { File(it.path) }
         clearSelection()
-        runOperation("Deleting") { progress ->
-            FileOps.delete(files, progress)
-            withContext(Dispatchers.Main) {
-                val open = (detail?.target as? DetailTarget.Disk)?.path
-                if (open != null && files.any { open == it.path || open.startsWith(it.path + "/") }) closeDetail()
+        when {
+            location is Location.Trash -> {
+                val entries = items.mapNotNull { trashEntries[it.path] }
+                runOperation("Deleting") { progress ->
+                    Trash.purge(entries, progress)
+                    "Deleted ${plural(entries.size, "item")} for good"
+                }
             }
-            "Deleted ${plural(files.size, "item")}"
+            deletesToTrash && !permanently -> runOperation("Moving to trash") { progress ->
+                val entries = Trash.moveToTrash(files, ::volumeRootOf, progress)
+                withContext(Dispatchers.Main) {
+                    message("Moved ${plural(entries.size, "item")} to the trash", "Undo") {
+                        viewModelScope.launch {
+                            try {
+                                val restored = withContext(Dispatchers.IO) { Trash.restore(entries) }
+                                message("Restored ${plural(restored.size, "item")}")
+                            } catch (e: IOException) {
+                                message(e.message ?: "Could not restore")
+                            }
+                            load()
+                        }
+                    }
+                }
+                null
+            }
+            else -> runOperation("Deleting") { progress ->
+                FileOps.delete(files, progress)
+                "Deleted ${plural(files.size, "item")}"
+            }
+        }
+    }
+
+    fun restoreFromTrash(items: List<FileItem>) {
+        val entries = items.mapNotNull { trashEntries[it.path] }
+        clearSelection()
+        runOperation("Restoring") { progress ->
+            val restored = Trash.restore(entries, progress)
+            withContext(Dispatchers.Main) {
+                val folder = restored.singleOrNull()?.parentFile ?: restored.map { it.parentFile }.distinct().singleOrNull()
+                if (folder != null) {
+                    message("Restored ${plural(restored.size, "item")} to ${folder.name}", "Open") { navigate(Location.Disk(folder.path)) }
+                } else {
+                    message("Restored ${plural(restored.size, "item")}")
+                }
+            }
+            null
+        }
+    }
+
+    fun emptyTrash() {
+        val entries = trashEntries.values.toList()
+        clearSelection()
+        runOperation("Emptying trash") { progress ->
+            Trash.purge(entries, progress)
+            "Trash emptied"
+        }
+    }
+
+    /** Renames several items at once; the snackbar offers to undo it. */
+    fun batchRename(steps: List<BatchRename.Step>) {
+        clearSelection()
+        viewModelScope.launch {
+            try {
+                val renamed = withContext(Dispatchers.IO) { BatchRename.execute(steps) }
+                message("Renamed ${plural(renamed.size, "item")}", "Undo") {
+                    viewModelScope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { BatchRename.undo(renamed) }
+                            message("Old names restored")
+                        } catch (e: IOException) {
+                            message(e.message ?: "Could not undo the rename")
+                        }
+                        load()
+                    }
+                }
+            } catch (e: IOException) {
+                message(e.message ?: "Could not rename")
+            }
+            load()
         }
     }
 
@@ -699,6 +1022,10 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 message(e.message ?: "$title failed")
             } finally {
                 _operation.value = null
+                folderSizes = emptyMap()
+                // The open file may just have been deleted, moved or trashed.
+                val open = detail?.takeIf { !it.isDirty }?.target as? DetailTarget.Disk
+                if (open != null && !File(open.path).exists()) closeDetail()
                 load()
             }
         }
@@ -756,6 +1083,23 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         val target = detail?.target ?: return
         loadDetail(target, forceText = true)
     }
+
+    /** Shows the raw bytes of the file that is open in the detail pane. */
+    fun openAsHex(info: FileInfo) {
+        val current = detail ?: return
+        val file = info.localFile ?: return
+        detail = DetailState(current.target, DetailContent.Hex(file, info))
+    }
+
+    /** Goes back from the hex view to the file's usual preview. */
+    fun reloadDetail() {
+        detail?.target?.let(::loadDetail)
+    }
+
+    /** The viewable images next to the one that is open, for stepping through a folder. */
+    fun siblingImages(path: String): List<FileItem> =
+        if (location !is Location.Disk) emptyList()
+        else items.filter { !it.isDirectory && FileTypes.isPreviewableImage(it.name) }.takeIf { list -> list.any { it.path == path } }.orEmpty()
 
     suspend fun saveEditor(editor: EditorSession): Boolean = try {
         editor.save()
@@ -816,6 +1160,10 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         if (FileTypes.isPreviewableImage(file.name)) {
             return DetailContent.Image(file, info().info)
         }
+        if (!forceText) {
+            if (kind == FileKind.PDF) return DetailContent.Pdf(file, info().info)
+            if (kind == FileKind.VIDEO || kind == FileKind.AUDIO) return DetailContent.Media(file, info().info, video = kind == FileKind.VIDEO)
+        }
         val textCandidate = forceText || FileTypes.isText(file.name) || kind == FileKind.OTHER
         if (!textCandidate || browsable) return info()
         if (file.length() > TextDocument.EDIT_LIMIT) {
@@ -826,7 +1174,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         if (!forceText && TextDocument.looksBinary(bytes)) {
             return info(note = "This does not look like a text file.", canOpenAsText = true)
         }
-        val writable = !readOnly && file.canWrite()
+        val writable = !readOnly && file.canWrite() && !Trash.isInTrash(file.path)
         return DetailContent.Text(EditorSession(file, readOnly = !writable, TextDocument.decode(bytes)))
     }
 
@@ -839,6 +1187,11 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             add(InfoRow("Size", "${Format.size(file.length())} (${"%,d".format(file.length())} bytes)"))
             add(InfoRow("MIME type", Launch.mimeType(file.name)))
+            addAll(MediaInfo.rows(getApplication(), file))
+        }
+        trashEntries[file.absolutePath]?.let { entry ->
+            add(InfoRow("Deleted from", File(entry.originalPath).parent ?: "/"))
+            add(InfoRow("Deleted", Format.date(entry.deletedAt)))
         }
         add(InfoRow("Modified", Format.date(file.lastModified())))
         add(InfoRow("Location", file.parent ?: "/"))
@@ -865,7 +1218,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
             add(InfoRow("In archive", "${session.file.name} › ${target.entryPath}"))
         }
         val previewable = FileTypes.isPreviewableImage(item.name) || FileTypes.isText(item.name) ||
-            FileTypes.kindOf(item.name) == FileKind.OTHER || forceText
+            FileTypes.kindOf(item.name) in PREVIEWED_KINDS || forceText
         if (!previewable || item.size > PREVIEW_LIMIT) {
             return DetailContent.Info(
                 FileInfo(item.name, false, FileTypes.describe(item.name, false), rows, null, false,
@@ -890,5 +1243,8 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** Largest archive entry pulled out automatically for a preview. */
         private const val PREVIEW_LIMIT = 64L * 1024 * 1024
+
+        /** Kinds of archive entry worth pulling out for a preview, besides text and images. */
+        private val PREVIEWED_KINDS = setOf(FileKind.OTHER, FileKind.PDF, FileKind.AUDIO, FileKind.VIDEO)
     }
 }

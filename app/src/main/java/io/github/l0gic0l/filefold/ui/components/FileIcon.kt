@@ -84,8 +84,8 @@ fun iconFor(kind: FileKind): ImageVector = when (kind) {
 }
 
 /**
- * A rounded tile with the file's type icon. Images on disk show a thumbnail
- * instead once it has loaded.
+ * A rounded tile with the file's type icon. Pictures and videos on disk show a
+ * thumbnail instead once it has loaded.
  */
 @Composable
 fun FileIcon(item: FileItem, size: Dp, modifier: Modifier = Modifier, showThumbnail: Boolean = true) {
@@ -99,7 +99,8 @@ fun FileIcon(item: FileItem, size: Dp, modifier: Modifier = Modifier, showThumbn
         if (!thumbnailLoaded) {
             Icon(iconFor(item.kind), contentDescription = null, tint = content, modifier = Modifier.size(size * 0.55f))
         }
-        if (showThumbnail && item.kind == FileKind.IMAGE && FileTypes.isPreviewableImage(item.name)) {
+        val hasThumbnail = (item.kind == FileKind.IMAGE && FileTypes.isPreviewableImage(item.name)) || item.kind == FileKind.VIDEO
+        if (showThumbnail && hasThumbnail) {
             AsyncImage(
                 model = File(item.path),
                 contentDescription = null,

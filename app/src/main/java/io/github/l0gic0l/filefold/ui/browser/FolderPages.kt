@@ -52,11 +52,13 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +67,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** Material's emphasised easing: a quick start that settles gently. */
@@ -172,10 +175,29 @@ private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bot
         }
     }
 
+    // Search results and folder sizes arrive bit by bit and re-sort the list as they do. Left alone,
+    // the list would follow whichever row was first and hide newer rows above it, so it is held at
+    // the top until the reader scrolls it themselves.
+    val query = if (isCurrent) vm.search else null
+    val usage = isCurrent && vm.sizeView && location is Location.Disk && query?.isActive != true
+    var holdAtTop by remember(page, query, usage) { mutableStateOf(true) }
+    LaunchedEffect(page, query, usage) {
+        snapshotFlow { listState.isScrollInProgress || gridState.isScrollInProgress }.first { it }
+        holdAtTop = false
+    }
+    if (holdAtTop && (query?.isActive == true || usage)) {
+        SideEffect {
+            listState.requestScrollToItem(0)
+            gridState.requestScrollToItem(0)
+        }
+    }
+
     // Opaque, so the folders do not show through each other while they move.
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Breadcrumbs(crumbs) { if (isCurrent) vm.navigate(it) }
+            if (usage) StorageBanner(vm)
+            if (isCurrent && location is Location.Trash && items.isNotEmpty()) TrashBanner()
             val archive = vm.archive
             if (location is Location.InArchive && archive != null && archive.file.path == location.archivePath &&
                 (!isCurrent || vm.error == null)
@@ -195,12 +217,26 @@ private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bot
                 val onClick: (io.github.l0gic0l.filefold.core.FileItem) -> Unit = { if (isCurrent) vm.open(it) }
                 val onLongClick: (io.github.l0gic0l.filefold.core.FileItem) -> Unit = { if (isCurrent) vm.toggleSelection(it) }
                 val error = if (isCurrent) vm.error else null
+                val searching = isCurrent && vm.search?.isActive == true
+                val thumbnails = !inArchive && vm.settings.showThumbnails
+                val total = vm.sizeViewTotal
                 when {
                     error != null -> ErrorState(error) { vm.refresh() }
-                    items.isEmpty() && (!isCurrent || vm.loading) -> DelayedSpinner()
-                    items.isEmpty() -> EmptyState(searching = !vm.search.isNullOrBlank(), inArchive = inArchive)
-                    vm.settings.gridView -> FileGrid(items, selection, inArchive, gridState, contentPadding, onClick, onLongClick)
-                    else -> FileList(items, selection, inArchive, listState, contentPadding, onClick, onLongClick)
+                    items.isEmpty() && (!isCurrent || vm.loading || vm.searching) -> DelayedSpinner()
+                    items.isEmpty() -> EmptyState(
+                        when {
+                            searching -> "No matches"
+                            location is Location.Trash -> "The trash is empty"
+                            inArchive -> "This folder in the archive is empty"
+                            else -> "This folder is empty"
+                        },
+                    )
+                    vm.settings.gridView && !usage -> FileGrid(items, selection, inArchive, thumbnails, gridState, contentPadding, onClick, onLongClick)
+                    else -> FileList(
+                        items, selection, inArchive, thumbnails, listState, contentPadding, onClick, onLongClick,
+                        hint = if (isCurrent && (searching || location is Location.Trash)) vm::hintFor else null,
+                        share = if (usage && total > 0) { item -> item.size.toFloat() / total } else null,
+                    )
                 }
             }
         }

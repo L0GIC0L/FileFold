@@ -84,6 +84,19 @@ class ArchiveIndex(val format: ArchiveFormat, entries: List<ArchiveEntryInfo>) {
     fun list(dir: String): List<FileItem> =
         children[dir].orEmpty().map { if (it.isDirectory) it.copy(itemCount = children[it.path]?.size ?: 0) else it }
 
+    /** Everything below [dir], at any depth, that [matches]; at most [limit] items. */
+    fun search(dir: String, limit: Int, matches: (FileItem) -> Boolean): List<FileItem> {
+        val found = ArrayList<FileItem>()
+        for ((parent, items) in children) {
+            if (dir.isNotEmpty() && parent != dir && !parent.startsWith("$dir/")) continue
+            for (item in items) {
+                if (found.size >= limit) return found
+                if (matches(item)) found += item
+            }
+        }
+        return found
+    }
+
     companion object {
         fun parentOf(path: String): String = path.substringBeforeLast('/', "")
         fun nameOf(path: String): String = path.substringAfterLast('/')

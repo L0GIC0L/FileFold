@@ -34,11 +34,18 @@ class LocationTest {
 
     @Test
     fun `locations survive being saved and read back`() {
-        for (loc in listOf(root, download, zipRoot, zipDocsDeep, Location.Disk("/path/with!/odd:chars"))) {
+        for (loc in listOf(root, download, zipRoot, zipDocsDeep, Location.Disk("/path/with!/odd:chars"), Location.Trash)) {
             assertEquals(loc, Location.decode(loc.encode()))
         }
         assertNull(Location.decode("garbage"))
         assertNull(Location.decode("a:no-separator"))
+    }
+
+    @Test
+    fun `the trash is a place of its own, outside every folder`() {
+        assertFalse(Location.Trash.isInside(root))
+        assertFalse(download.isInside(Location.Trash))
+        assertEquals("", Location.Trash.diskPath)
     }
 
     @Test

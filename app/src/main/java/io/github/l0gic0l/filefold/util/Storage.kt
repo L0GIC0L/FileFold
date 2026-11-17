@@ -16,7 +16,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import java.io.File
 
 /** A shortcut in the navigation drawer or rail. */
-data class Place(val label: String, val path: String, val icon: ImageVector, val isVolume: Boolean)
+data class Place(
+    val label: String,
+    val path: String,
+    val icon: ImageVector,
+    val isVolume: Boolean,
+    /** Capacity and free space in bytes, for volumes. */
+    val total: Long = 0,
+    val free: Long = 0,
+)
 
 object Storage {
 
@@ -36,8 +44,12 @@ object Storage {
                 path = dir.absolutePath,
                 icon = if (volume.isPrimary) Icons.Default.PhoneAndroid else Icons.Default.SdCard,
                 isVolume = true,
+                total = dir.totalSpace,
+                free = dir.usableSpace,
             )
-        }.ifEmpty { listOf(Place("Internal storage", primaryRoot.absolutePath, Icons.Default.PhoneAndroid, true)) }
+        }.ifEmpty {
+            listOf(Place("Internal storage", primaryRoot.absolutePath, Icons.Default.PhoneAndroid, true, primaryRoot.totalSpace, primaryRoot.usableSpace))
+        }
     }
 
     /** The standard folders everyone uses, when they exist. */

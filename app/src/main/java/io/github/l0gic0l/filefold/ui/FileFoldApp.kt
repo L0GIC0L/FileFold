@@ -18,10 +18,15 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -69,7 +74,9 @@ import io.github.l0gic0l.filefold.ui.browser.Location
 import io.github.l0gic0l.filefold.ui.browser.OperationDialog
 import io.github.l0gic0l.filefold.ui.browser.openSettings
 import io.github.l0gic0l.filefold.ui.detail.DetailPane
+import io.github.l0gic0l.filefold.util.Format
 import io.github.l0gic0l.filefold.util.Place
+import java.io.File
 import kotlinx.coroutines.launch
 
 /**
@@ -181,10 +188,7 @@ private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) 
             drawerContent = {
                 if (!wide) {
                     ModalDrawerSheet {
-                        PlacesDrawer(vm) { place ->
-                            vm.openPlace(place.path)
-                            scope.launch { drawerState.close() }
-                        }
+                        PlacesDrawer(vm) { scope.launch { drawerState.close() } }
                     }
                 }
             },
@@ -210,17 +214,16 @@ private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) 
     operation?.let { OperationDialog(it, vm::cancelOperation) }
 }
 
-/** The storage location that best matches where the browser is, for highlighting. */
+/** The storage location or favourite that best matches where the browser is, for highlighting. */
 private fun currentPlace(vm: BrowserViewModel): String? {
-    val path = when (val loc = vm.location) {
-        is Location.Disk -> loc.path
-        is Location.InArchive -> loc.archivePath
-    }
-    return vm.places.map { it.path }.filter { path == it || path.startsWith("$it/") }.maxByOrNull { it.length }
+    val path = vm.location.diskPath
+    if (path.isEmpty()) return null
+    return (vm.places.map { it.path } + vm.settings.favorites).filter { path == it || path.startsWith("$it/") }.maxByOrNull { it.length }
 }
 
+/** The drawer on a folded phone. [onDone] closes it after a choice. */
 @Composable
-private fun PlacesDrawer(vm: BrowserViewModel, onClick: (Place) -> Unit) {
+private fun PlacesDrawer(vm: BrowserViewModel, onDone: () -> Unit) {
     val current = currentPlace(vm)
     Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
         Spacer(Modifier.height(16.dp))
@@ -230,13 +233,73 @@ private fun PlacesDrawer(vm: BrowserViewModel, onClick: (Place) -> Unit) {
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
+        val open: (String) -> Unit = { vm.openPlace(it); onDone() }
         val (volumes, shortcuts) = vm.places.partition { it.isVolume }
-        volumes.forEach { DrawerItem(it, it.path == current, onClick) }
-        if (shortcuts.isNotEmpty()) {
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            shortcuts.forEach { DrawerItem(it, it.path == current, onClick) }
+        volumes.forEach { place ->
+            NavigationDrawerItem(
+                label = {
+                    Column {
+                        Text(place.label)
+                        if (place.total > 0) {
+                            Text(
+                                "${Format.size(place.free)} free of ${Format.size(place.total)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
+                icon = { Icon(place.icon, null) },
+                selected = place.path == current,
+                onClick = { open(place.path) },
+            )
         }
-        HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        if (shortcuts.isNotEmpty()) {
+            DrawerDivider()
+            shortcuts.forEach { place ->
+                NavigationDrawerItem(
+                    label = { Text(place.label) },
+                    icon = { Icon(place.icon, null) },
+                    selected = place.path == current,
+                    onClick = { open(place.path) },
+                )
+            }
+        }
+        val favorites = vm.settings.favorites
+        if (favorites.isNotEmpty()) {
+            DrawerDivider()
+            Text(
+                "Favourites",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            favorites.forEach { path ->
+                NavigationDrawerItem(
+                    label = { Text(File(path).name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    icon = { Icon(Icons.Default.Star, null) },
+                    badge = {
+                        IconButton(onClick = { vm.toggleFavorite(path) }) { Icon(Icons.Default.Close, "Remove from favourites") }
+                    },
+                    selected = path == current,
+                    onClick = { open(path) },
+                )
+            }
+        }
+        DrawerDivider()
+        NavigationDrawerItem(
+            label = { Text("Recent files") },
+            icon = { Icon(Icons.Default.History, null) },
+            selected = false,
+            onClick = { vm.openRecent(); onDone() },
+        )
+        NavigationDrawerItem(
+            label = { Text("Trash") },
+            icon = { Icon(Icons.Default.Delete, null) },
+            selected = vm.location is Location.Trash,
+            onClick = { vm.openTrash(); onDone() },
+        )
+        DrawerDivider()
         val context = LocalContext.current
         NavigationDrawerItem(
             label = { Text("Settings") },
@@ -249,15 +312,9 @@ private fun PlacesDrawer(vm: BrowserViewModel, onClick: (Place) -> Unit) {
 }
 
 @Composable
-private fun DrawerItem(place: Place, selected: Boolean, onClick: (Place) -> Unit) {
-    NavigationDrawerItem(
-        label = { Text(place.label) },
-        icon = { Icon(place.icon, null) },
-        selected = selected,
-        onClick = { onClick(place) },
-    )
-}
+private fun DrawerDivider() = HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
+/** The rail on an unfolded device or in landscape: the same destinations as the drawer. */
 @Composable
 private fun PlacesRail(vm: BrowserViewModel) {
     val current = currentPlace(vm)
@@ -281,6 +338,26 @@ private fun PlacesRail(vm: BrowserViewModel) {
                     },
                 )
             }
+            vm.settings.favorites.forEach { path ->
+                NavigationRailItem(
+                    selected = path == current,
+                    onClick = { vm.openPlace(path) },
+                    icon = { Icon(Icons.Default.Star, null) },
+                    label = { Text(File(path).name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                )
+            }
+            NavigationRailItem(
+                selected = false,
+                onClick = { vm.openRecent() },
+                icon = { Icon(Icons.Default.History, null) },
+                label = { Text("Recent") },
+            )
+            NavigationRailItem(
+                selected = vm.location is Location.Trash,
+                onClick = { vm.openTrash() },
+                icon = { Icon(Icons.Default.Delete, null) },
+                label = { Text("Trash") },
+            )
             Spacer(Modifier.height(8.dp))
             val context = LocalContext.current
             NavigationRailItem(

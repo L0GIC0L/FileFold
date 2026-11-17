@@ -68,6 +68,12 @@ data class AppSettings(
     val theme: ThemeSettings = ThemeSettings(),
     val iconColors: IconColorSettings = IconColorSettings(),
     val autoSort: AutoSortConfig = AutoSortConfig(),
+    /** Deleting moves items to the trash, where they stay for 30 days. */
+    val useTrash: Boolean = true,
+    /** Show pictures and video frames in place of type icons. */
+    val showThumbnails: Boolean = true,
+    /** Folders pinned to the navigation drawer, as absolute paths. */
+    val favorites: List<String> = emptyList(),
 )
 
 /** Open tabs as saved strings (see Location.encode) and which one was active. */
@@ -87,6 +93,9 @@ class SettingsRepository(private val context: Context) {
         val wordWrap = booleanPreferencesKey("editor_word_wrap")
         val lineNumbers = booleanPreferencesKey("editor_line_numbers")
         val fontSize = floatPreferencesKey("editor_font_size")
+        val useTrash = booleanPreferencesKey("use_trash")
+        val showThumbnails = booleanPreferencesKey("show_thumbnails")
+        val favorites = stringPreferencesKey("favorites")
         val tabs = stringPreferencesKey("tabs")
         val activeTab = intPreferencesKey("active_tab")
 
@@ -146,6 +155,9 @@ class SettingsRepository(private val context: Context) {
                 foldersTarget = prefs[Keys.sortFoldersTarget] ?: d.autoSort.foldersTarget,
                 includeHidden = prefs[Keys.sortHidden] ?: d.autoSort.includeHidden,
             ),
+            useTrash = prefs[Keys.useTrash] ?: d.useTrash,
+            showThumbnails = prefs[Keys.showThumbnails] ?: d.showThumbnails,
+            favorites = prefs[Keys.favorites]?.split('\n')?.filter { it.isNotEmpty() }.orEmpty(),
         )
     }
 
@@ -167,6 +179,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setShowHidden(value: Boolean) = edit { it[Keys.showHidden] = value }
     suspend fun setGridView(value: Boolean) = edit { it[Keys.gridView] = value }
+    suspend fun setUseTrash(value: Boolean) = edit { it[Keys.useTrash] = value }
+    suspend fun setShowThumbnails(value: Boolean) = edit { it[Keys.showThumbnails] = value }
+    suspend fun setFavorites(paths: List<String>) = edit { it[Keys.favorites] = paths.distinct().joinToString("\n") }
     suspend fun setEditorWordWrap(value: Boolean) = edit { it[Keys.wordWrap] = value }
     suspend fun setEditorLineNumbers(value: Boolean) = edit { it[Keys.lineNumbers] = value }
     suspend fun setEditorFontSize(value: Float) = edit { it[Keys.fontSize] = value.coerceIn(8f, 32f) }

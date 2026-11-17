@@ -1,5 +1,8 @@
 package io.github.l0gic0l.filefold.ui.browser
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -12,6 +15,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,6 +46,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -48,8 +61,17 @@ import io.github.l0gic0l.filefold.archive.ArchiveFormat
 import io.github.l0gic0l.filefold.core.AutoSortConfig
 import io.github.l0gic0l.filefold.core.AutoSortMode
 import io.github.l0gic0l.filefold.core.AutoSorter
+import io.github.l0gic0l.filefold.core.BatchRename
+import io.github.l0gic0l.filefold.core.Checksums
 import io.github.l0gic0l.filefold.core.FileOps
+import io.github.l0gic0l.filefold.core.Progress
+import io.github.l0gic0l.filefold.core.Trash
 import io.github.l0gic0l.filefold.util.Format
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
 
 /** Shows whichever dialog the ViewModel asks for. */
 @Composable
@@ -63,20 +85,18 @@ fun BrowserDialogs(vm: BrowserViewModel) {
             vm.rename(d.item, it)
             close()
         }
-        is BrowserDialog.Delete -> AlertDialog(
+        is BrowserDialog.Delete -> DeleteDialog(vm, d, close)
+        BrowserDialog.EmptyTrash -> AlertDialog(
             onDismissRequest = close,
-            title = { Text(if (d.items.size == 1) "Delete \"${d.items.single().name}\"?" else "Delete ${d.items.size} items?") },
-            text = {
-                val folders = d.items.count { it.isDirectory }
-                Text(
-                    "This cannot be undone." + if (folders > 0) " Folders are deleted with everything inside them." else "",
-                )
-            },
+            title = { Text("Empty the trash?") },
+            text = { Text("Everything in it is deleted for good. This cannot be undone.") },
             confirmButton = {
-                TextButton(onClick = { vm.delete(d.items); close() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = { vm.emptyTrash(); close() }) { Text("Empty trash", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = close) { Text("Cancel") } },
         )
+        is BrowserDialog.BatchRename -> BatchRenameDialog(d, close) { steps -> vm.batchRename(steps); close() }
+        is BrowserDialog.Checksums -> ChecksumsDialog(d.file, close)
         is BrowserDialog.Compress -> CompressDialog(d, close) { name, format -> vm.compress(d.files, name, format); close() }
         is BrowserDialog.Extract -> ExtractDialog(d, close) { folder -> vm.confirmExtract(d, folder); close() }
         is BrowserDialog.Password -> PasswordDialog(d)
@@ -132,6 +152,189 @@ fun BrowserDialogs(vm: BrowserViewModel) {
             },
         )
     }
+}
+
+/** Asks before deleting. With the trash in use, items go there unless "for good" is ticked. */
+@Composable
+private fun DeleteDialog(vm: BrowserViewModel, dialog: BrowserDialog.Delete, close: () -> Unit) {
+    val toTrash = vm.deletesToTrash
+    var permanently by remember { mutableStateOf(false) }
+    val forGood = !toTrash || permanently
+    val single = dialog.items.singleOrNull()
+    val what = if (single != null) "\"${single.name}\"" else "${dialog.items.size} items"
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text(if (forGood) "Delete $what for good?" else "Move $what to the trash?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    when {
+                        !forGood -> "You can restore ${if (single != null) "it" else "them"} from the trash for ${Trash.KEEP_DAYS} days."
+                        dialog.items.any { it.isDirectory } -> "This cannot be undone. Folders are deleted with everything inside them."
+                        else -> "This cannot be undone."
+                    },
+                )
+                if (toTrash) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().selectable(permanently, role = Role.Checkbox) { permanently = !permanently },
+                    ) {
+                        Checkbox(checked = permanently, onCheckedChange = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Skip the trash and delete for good")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { vm.delete(dialog.items, permanently); close() }) {
+                if (forGood) Text("Delete", color = MaterialTheme.colorScheme.error) else Text("Move to trash")
+            }
+        },
+        dismissButton = { TextButton(onClick = close) { Text("Cancel") } },
+    )
+}
+
+/** Renames every selected item from a template, showing what the first few will be called. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BatchRenameDialog(dialog: BrowserDialog.BatchRename, onDismiss: () -> Unit, onConfirm: (List<BatchRename.Step>) -> Unit) {
+    val files = remember(dialog) { dialog.items.map { File(it.path) } }
+    var template by remember { mutableStateOf("{name}") }
+    var find by remember { mutableStateOf("") }
+    var replace by remember { mutableStateOf("") }
+    val steps = remember(template, find, replace) { BatchRename.plan(files, BatchRename.Rule(template, find, replace)) }
+    val problem = remember(steps) { BatchRename.problem(steps) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename ${files.size} items") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = template,
+                    onValueChange = { template = it },
+                    singleLine = true,
+                    label = { Text("New name") },
+                    isError = problem != null && problem != BatchRename.NOTHING_CHANGES,
+                    supportingText = { Text(problem?.takeIf { it != BatchRename.NOTHING_CHANGES } ?: "File extensions are kept") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("{name}" to "Old name", "{n}" to "Number", "{date}" to "Date").forEach { (token, label) ->
+                        AssistChip(onClick = { template += token }, label = { Text(label) })
+                    }
+                }
+                OutlinedTextField(
+                    value = find,
+                    onValueChange = { find = it },
+                    singleLine = true,
+                    label = { Text("Find in old name (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (find.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = replace,
+                        onValueChange = { replace = it },
+                        singleLine = true,
+                        label = { Text("Replace with") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text("Preview", style = MaterialTheme.typography.labelLarge)
+                steps.take(3).forEach { step ->
+                    Column {
+                        Text(
+                            step.source.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.MiddleEllipsis,
+                        )
+                        Text("→ ${step.newName}", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+                    }
+                }
+                if (steps.size > 3) {
+                    Text(
+                        "…and ${steps.size - 3} more",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(steps) }, enabled = problem == null) { Text("Rename") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Works out a file's checksums and compares them with a value pasted from elsewhere. */
+@Composable
+private fun ChecksumsDialog(file: File, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var results by remember { mutableStateOf<Map<String, String>?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    var fraction by remember { mutableFloatStateOf(0f) }
+    var expected by remember { mutableStateOf("") }
+    LaunchedEffect(file) {
+        try {
+            results = withContext(Dispatchers.IO) {
+                val job = coroutineContext.job
+                Checksums.compute(file, Progress(isActive = { job.isActive }) { done, total, _ -> if (total > 0) fraction = done.toFloat() / total })
+            }
+        } catch (e: IOException) {
+            failure = e.message ?: "Could not read the file"
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Checksums") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(file.name, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val sums = results
+                when {
+                    failure != null -> Text(failure!!, color = MaterialTheme.colorScheme.error)
+                    sums == null -> LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                    else -> {
+                        val matched = Checksums.match(sums, expected)
+                        sums.forEach { (algorithm, value) ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        algorithm,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (algorithm == matched) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                                }
+                                IconButton(onClick = {
+                                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(algorithm, value))
+                                    Toast.makeText(context, "$algorithm copied", Toast.LENGTH_SHORT).show()
+                                }) { Icon(Icons.Default.ContentCopy, "Copy $algorithm") }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = expected,
+                            onValueChange = { expected = it },
+                            singleLine = true,
+                            label = { Text("Compare with") },
+                            placeholder = { Text("Paste the expected value") },
+                            isError = expected.isNotBlank() && matched == null,
+                            supportingText = {
+                                when {
+                                    expected.isBlank() -> Unit
+                                    matched != null -> Text("Matches the $matched checksum", color = MaterialTheme.colorScheme.primary)
+                                    else -> Text("Does not match any of these")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 /**

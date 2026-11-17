@@ -20,11 +20,17 @@ sealed interface Location {
         override val key: String get() = "$archivePath!/$dir"
     }
 
-    /** The path on disk: the folder itself, or the archive file for a folder inside an archive. */
+    /** Everything that has been deleted and can still be put back. */
+    data object Trash : Location {
+        override val key: String get() = "trash:"
+    }
+
+    /** The path on disk: the folder itself, or the archive file for a folder inside an archive. Empty for the trash. */
     val diskPath: String
         get() = when (this) {
             is Disk -> path
             is InArchive -> archivePath
+            Trash -> ""
         }
 
     /** True when this location lies somewhere inside [other], at any depth. */
@@ -32,12 +38,14 @@ sealed interface Location {
         is Disk -> diskPath.startsWith(other.path.trimEnd('/') + "/")
         is InArchive -> this is InArchive && archivePath == other.archivePath && dir != other.dir &&
             (other.dir.isEmpty() || dir.startsWith(other.dir + "/"))
+        Trash -> false
     }
 
     /** A string form for saving open tabs, read back by [decode]. */
     fun encode(): String = when (this) {
         is Disk -> "d:$path"
         is InArchive -> "a:$archivePath!/$dir"
+        Trash -> "t:"
     }
 
     companion object {
@@ -45,6 +53,7 @@ sealed interface Location {
             value.startsWith("d:") -> Disk(value.removePrefix("d:"))
             value.startsWith("a:") -> value.removePrefix("a:").split("!/", limit = 2)
                 .takeIf { it.size == 2 }?.let { InArchive(it[0], it[1]) }
+            value == "t:" -> Trash
             else -> null
         }
     }
@@ -102,6 +111,13 @@ sealed interface BrowserDialog {
     data object NewFile : BrowserDialog
     data class Rename(val item: FileItem) : BrowserDialog
     data class Delete(val items: List<FileItem>) : BrowserDialog
+    data object EmptyTrash : BrowserDialog
+
+    /** Rename several items at once from a template. */
+    data class BatchRename(val items: List<FileItem>) : BrowserDialog
+
+    /** CRC32, MD5 and SHA checksums of one file. */
+    data class Checksums(val file: File) : BrowserDialog
     data class Compress(val files: List<File>, val suggestedName: String) : BrowserDialog
 
     /**

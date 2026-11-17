@@ -4,10 +4,12 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,15 +38,29 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.video.VideoFrameDecoder
 import io.github.l0gic0l.filefold.data.rememberAppSettings
 import io.github.l0gic0l.filefold.ui.FileFoldApp
+import io.github.l0gic0l.filefold.ui.browser.BrowserDialog
+import io.github.l0gic0l.filefold.ui.browser.BrowserViewModel
+import io.github.l0gic0l.filefold.ui.browser.Location
 import io.github.l0gic0l.filefold.ui.theme.FileFoldTheme
 import io.github.l0gic0l.filefold.util.Storage
 
 class MainActivity : ComponentActivity() {
+
+    // The same instance the screens use, so keyboard shortcuts act on what is showing.
+    private val browser: BrowserViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // Thumbnails for videos as well as pictures.
+        SingletonImageLoader.setSafe { context ->
+            ImageLoader.Builder(context).components { add(VideoFrameDecoder.Factory()) }.build()
+        }
         setContent {
             // Nothing is drawn for the instant before settings are read, so the theme never flashes.
             val settings = rememberAppSettings() ?: return@setContent
@@ -60,6 +76,42 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** Ctrl shortcuts for a keyboard or a laptop-style foldable. Text fields take their own first. */
+    override fun onKeyShortcut(keyCode: Int, event: KeyEvent): Boolean {
+        if (!event.isCtrlPressed || !Storage.hasAllFilesAccess()) return super.onKeyShortcut(keyCode, event)
+        val vm = browser
+        when (keyCode) {
+            KeyEvent.KEYCODE_A -> vm.selectAll()
+            KeyEvent.KEYCODE_C -> vm.copySelection(cut = false)
+            KeyEvent.KEYCODE_X -> if (vm.location is Location.Disk) vm.copySelection(cut = true)
+            KeyEvent.KEYCODE_V -> if (vm.canPaste) vm.paste()
+            KeyEvent.KEYCODE_F -> vm.openSearch()
+            KeyEvent.KEYCODE_T -> vm.newTab()
+            KeyEvent.KEYCODE_W -> vm.closeTab(vm.activeTabId)
+            KeyEvent.KEYCODE_N -> if (vm.location is Location.Disk) vm.dialog = BrowserDialog.NewFolder
+            KeyEvent.KEYCODE_H -> vm.setShowHidden(!vm.settings.showHidden)
+            KeyEvent.KEYCODE_R -> vm.refresh()
+            else -> return super.onKeyShortcut(keyCode, event)
+        }
+        return true
+    }
+
+    /** Delete, F2 and F5, as on a desktop. */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (!Storage.hasAllFilesAccess()) return super.onKeyDown(keyCode, event)
+        val vm = browser
+        val selected = vm.selectedItems
+        when {
+            keyCode == KeyEvent.KEYCODE_FORWARD_DEL && selected.isNotEmpty() && vm.location !is Location.InArchive ->
+                vm.dialog = BrowserDialog.Delete(selected)
+            keyCode == KeyEvent.KEYCODE_F2 && selected.size == 1 && vm.location is Location.Disk ->
+                vm.dialog = BrowserDialog.Rename(selected.single())
+            keyCode == KeyEvent.KEYCODE_F5 -> vm.refresh()
+            else -> return super.onKeyDown(keyCode, event)
+        }
+        return true
     }
 
     private fun requestAllFilesAccess() {

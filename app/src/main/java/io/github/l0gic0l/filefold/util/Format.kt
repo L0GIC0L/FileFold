@@ -41,6 +41,13 @@ object Format {
         return cached.third.format(Instant.ofEpochMilli(millis))
     }
 
+    /** A share from 0 to 1 as "34%", or "<1%" for a sliver. */
+    fun percent(fraction: Float): String = when {
+        fraction <= 0f -> "0%"
+        fraction < 0.01f -> "<1%"
+        else -> "${(fraction * 100).toInt()}%"
+    }
+
     fun items(count: Int): String = when (count) {
         -1 -> "Folder"
         1 -> "1 item"

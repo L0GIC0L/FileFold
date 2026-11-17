@@ -6,18 +6,23 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -35,7 +40,16 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.FlipToBack
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
@@ -54,6 +68,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -87,7 +103,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.l0gic0l.filefold.archive.ArchiveFormat
 import io.github.l0gic0l.filefold.core.FileItem
+import io.github.l0gic0l.filefold.core.FileSearch
+import io.github.l0gic0l.filefold.core.SearchQuery
 import io.github.l0gic0l.filefold.core.SortBy
+import io.github.l0gic0l.filefold.core.SortGroup
+import io.github.l0gic0l.filefold.util.Format
 import io.github.l0gic0l.filefold.ui.detail.DetailTarget
 import io.github.l0gic0l.filefold.ui.settings.SettingsActivity
 import java.io.File
@@ -109,7 +129,7 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
         topBar = {
             when {
                 vm.selectionMode -> SelectionBar(vm, inArchive)
-                vm.search != null -> SearchBar(vm)
+                vm.search != null -> SearchBar(vm, title)
                 else -> TopAppBar(
                     title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
@@ -126,7 +146,7 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
             }
         },
         floatingActionButton = {
-            if (!inArchive && !vm.selectionMode && vm.clipboard == null) NewItemButton(vm)
+            if (location is Location.Disk && !vm.selectionMode && vm.clipboard == null && vm.search == null) NewItemButton(vm)
         },
         bottomBar = {
             AnimatedVisibility(
@@ -138,6 +158,7 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
             AnimatedVisibility(visible = vm.tabs.size > 1) { TabStrip(vm) }
+            vm.search?.let { SearchFilters(vm, it) }
             FolderPages(vm, bottomPadding = padding.calculateBottomPadding())
         }
     }
@@ -149,8 +170,9 @@ fun openSettings(context: Context) = context.startActivity(Intent(context, Setti
 @Composable
 private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
     val context = LocalContext.current
-    IconButton(onClick = vm::openSearch) { Icon(Icons.Default.Search, "Search this folder") }
-    SortMenu(vm)
+    val inTrash = vm.location is Location.Trash
+    IconButton(onClick = vm::openSearch) { Icon(Icons.Default.Search, "Search") }
+    if (!inTrash) SortMenu(vm)
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "More options") }
@@ -165,6 +187,19 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
                     item("New folder", Icons.Default.CreateNewFolder) { vm.dialog = BrowserDialog.NewFolder }
                     item("New text file", Icons.AutoMirrored.Filled.NoteAdd) { vm.dialog = BrowserDialog.NewFile }
                     item("Auto-sort into folders…", Icons.Default.AutoAwesome) { vm.dialog = BrowserDialog.AutoSort(File(location.path)) }
+                    if (vm.sizeView) {
+                        item("Hide storage usage", Icons.Default.DataUsage) { vm.showSizes(false) }
+                    } else {
+                        item("Storage usage", Icons.Default.DataUsage) { vm.showSizes(true) }
+                    }
+                    if (vm.isFavorite(location.path)) {
+                        item("Remove from favourites", Icons.Default.Star) { vm.toggleFavorite(location.path) }
+                    } else {
+                        item("Add to favourites", Icons.Default.StarBorder) { vm.toggleFavorite(location.path) }
+                    }
+                }
+                Location.Trash -> item("Empty trash…", Icons.Default.DeleteForever) {
+                    if (vm.items.isEmpty()) vm.message("The trash is already empty") else vm.dialog = BrowserDialog.EmptyTrash
                 }
             }
             if (vm.settings.gridView) {
@@ -176,7 +211,7 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
             item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
             item("Refresh", Icons.Default.Refresh) { vm.refresh() }
             item("Settings", Icons.Default.Settings) { openSettings(context) }
-            if (!inArchive) {
+            if (vm.location is Location.Disk) {
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Show hidden files") },
@@ -227,16 +262,18 @@ private fun SortMenu(vm: BrowserViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SearchBar(vm: BrowserViewModel) {
+private fun SearchBar(vm: BrowserViewModel, folderName: String) {
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    val query = vm.search ?: return
+    // Opened from "Recent files" there is already something to show, so the keyboard stays down.
+    LaunchedEffect(Unit) { if (!query.isActive) focus.requestFocus() }
     TopAppBar(
         navigationIcon = { IconButton(onClick = vm::closeSearch) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close search") } },
         title = {
             TextField(
-                value = vm.search.orEmpty(),
-                onValueChange = vm::updateSearch,
-                placeholder = { Text("Search this folder") },
+                value = query.text,
+                onValueChange = { vm.updateSearch(query.copy(text = it)) },
+                placeholder = { Text("Search in $folderName", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 colors = TextFieldDefaults.colors(
@@ -249,9 +286,57 @@ private fun SearchBar(vm: BrowserViewModel) {
             )
         },
         actions = {
-            if (!vm.search.isNullOrEmpty()) IconButton(onClick = { vm.updateSearch("") }) { Icon(Icons.Default.Close, "Clear") }
+            if (query.text.isNotEmpty()) {
+                IconButton(onClick = { vm.updateSearch(query.copy(text = "")) }) { Icon(Icons.Default.Close, "Clear") }
+            }
         },
     )
+}
+
+/** Under the search bar: narrow the search to a kind of file, to recent changes or to big files. */
+@Composable
+private fun SearchFilters(vm: BrowserViewModel, query: SearchQuery) {
+    Column {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            items(SortGroup.entries.filter { it != SortGroup.OTHER }, key = { it.name }) { group ->
+                FilterChip(
+                    selected = query.group == group,
+                    onClick = { vm.updateSearch(query.copy(group = if (query.group == group) null else group)) },
+                    label = { Text(group.defaultFolder) },
+                )
+            }
+            item(key = "recent") {
+                FilterChip(
+                    selected = query.recent,
+                    onClick = { vm.updateSearch(query.copy(recent = !query.recent)) },
+                    label = { Text("Last ${FileSearch.RECENT_DAYS} days") },
+                )
+            }
+            item(key = "large") {
+                FilterChip(
+                    selected = query.large,
+                    onClick = { vm.updateSearch(query.copy(large = !query.large)) },
+                    label = { Text("Over ${Format.size(FileSearch.LARGE_BYTES)}") },
+                )
+            }
+        }
+        // Kept in the layout while idle, so the list does not jump as searches start and stop.
+        Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(4.dp)) {
+            if (vm.searching) LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+        if (vm.searchTruncated) {
+            Text(
+                "Showing the first ${FileSearch.MAX_RESULTS} matches. Add more words to narrow it down.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -276,6 +361,12 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
                 IconButton(onClick = vm::selectAll) { Icon(Icons.Default.SelectAll, "Select all") }
                 return@TopAppBar
             }
+            if (vm.location is Location.Trash) {
+                IconButton(onClick = { vm.restoreFromTrash(selected) }) { Icon(Icons.Default.RestoreFromTrash, "Restore") }
+                IconButton(onClick = { vm.dialog = BrowserDialog.Delete(selected) }) { Icon(Icons.Default.DeleteForever, "Delete for good") }
+                IconButton(onClick = vm::selectAll) { Icon(Icons.Default.SelectAll, "Select all") }
+                return@TopAppBar
+            }
             IconButton(onClick = { vm.copySelection(cut = false) }) { Icon(Icons.Default.ContentCopy, "Copy") }
             IconButton(onClick = { vm.copySelection(cut = true) }) { Icon(Icons.Default.ContentCut, "Move") }
             IconButton(onClick = { vm.dialog = BrowserDialog.Delete(selected) }) { Icon(Icons.Default.Delete, "Delete") }
@@ -290,7 +381,14 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
                     if (single != null && (single.isDirectory || ArchiveFormat.fromName(single.name) != null)) {
                         action("Open in new tab", Icons.Default.Tab) { vm.openInNewTab(single) }
                     }
-                    if (single != null) action("Rename", Icons.Default.DriveFileRenameOutline) { vm.dialog = BrowserDialog.Rename(single) }
+                    if (single != null && vm.search?.isActive == true) {
+                        action("Show in its folder", Icons.Default.FolderOpen) { vm.showInFolder(single) }
+                    }
+                    if (single != null) {
+                        action("Rename", Icons.Default.DriveFileRenameOutline) { vm.dialog = BrowserDialog.Rename(single) }
+                    } else {
+                        action("Rename all…", Icons.Default.DriveFileRenameOutline) { vm.dialog = BrowserDialog.BatchRename(selected) }
+                    }
                     action("Compress…", Icons.Default.Compress) {
                         vm.dialog = BrowserDialog.Compress(selected.map { File(it.path) }, suggestedArchiveName(vm, selected))
                     }
@@ -298,10 +396,22 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
                         action("Extract…", Icons.Default.Unarchive) { vm.clearSelection(); vm.promptExtract(single.path) }
                     }
                     action("Share", Icons.Default.Share) { vm.share(selected) }
+                    if (single != null && !single.isDirectory) {
+                        action("Checksums…", Icons.Default.Fingerprint) { vm.clearSelection(); vm.dialog = BrowserDialog.Checksums(File(single.path)) }
+                    }
+                    if (single != null && single.isDirectory) {
+                        if (vm.isFavorite(single.path)) {
+                            action("Remove from favourites", Icons.Default.Star) { vm.toggleFavorite(single.path) }
+                        } else {
+                            action("Add to favourites", Icons.Default.StarBorder) { vm.toggleFavorite(single.path) }
+                        }
+                    }
                     if (single != null) {
+                        action("Copy path", Icons.Default.Link) { vm.copyPath(single) }
                         action("Details", Icons.Default.Info) { vm.clearSelection(); vm.showDetail(DetailTarget.Disk(single.path)) }
                     }
                     action("Select all", Icons.Default.SelectAll) { vm.selectAll() }
+                    action("Invert selection", Icons.Default.FlipToBack) { vm.invertSelection() }
                 }
             }
         },

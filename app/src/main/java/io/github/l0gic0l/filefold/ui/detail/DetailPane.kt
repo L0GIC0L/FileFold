@@ -60,6 +60,9 @@ fun DetailPane(vm: BrowserViewModel, contentKey: String?, showBack: Boolean, onB
         is DetailContent.Text -> TextEditorScreen(vm, content.editor, showBack, onBack)
         is DetailContent.Image -> ImageScreen(vm, detail.target, content, showBack, onBack)
         is DetailContent.Info -> InfoScreen(vm, detail.target, content.info, showBack, onBack)
+        is DetailContent.Pdf -> PdfScreen(vm, detail.target, content, showBack, onBack)
+        is DetailContent.Media -> MediaScreen(vm, detail.target, content, showBack, onBack)
+        is DetailContent.Hex -> HexScreen(vm, content, showBack, onBack)
     }
 }
 

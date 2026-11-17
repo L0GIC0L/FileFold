@@ -54,6 +54,13 @@ sealed interface DetailContent {
     data class Text(val editor: EditorSession) : DetailContent
     data class Image(val file: File, val info: FileInfo) : DetailContent
     data class Info(val info: FileInfo) : DetailContent
+    data class Pdf(val file: File, val info: FileInfo) : DetailContent
+
+    /** Audio or video played in the built-in player. */
+    data class Media(val file: File, val info: FileInfo, val video: Boolean) : DetailContent
+
+    /** The raw bytes of any file. */
+    data class Hex(val file: File, val info: FileInfo) : DetailContent
 }
 
 data class DetailState(val target: DetailTarget, val content: DetailContent) {

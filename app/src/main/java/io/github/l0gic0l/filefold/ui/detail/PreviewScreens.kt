@@ -21,14 +21,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.FolderZip
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.InstallMobile
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -56,6 +60,7 @@ import coil3.request.ImageRequest
 import io.github.l0gic0l.filefold.archive.ArchiveIndex
 import io.github.l0gic0l.filefold.core.FileKind
 import io.github.l0gic0l.filefold.core.FileTypes
+import io.github.l0gic0l.filefold.ui.browser.BrowserDialog
 import io.github.l0gic0l.filefold.ui.browser.BrowserViewModel
 import io.github.l0gic0l.filefold.ui.components.KindBadge
 import io.github.l0gic0l.filefold.ui.components.TabletopLayout
@@ -65,20 +70,39 @@ import java.io.File
 /** Image preview with pinch and double-tap zoom. In tabletop posture the details sit on the lower half. */
 @Composable
 fun ImageScreen(vm: BrowserViewModel, target: DetailTarget, content: DetailContent.Image, showBack: Boolean, onBack: () -> Unit) {
-    val context = LocalContext.current
     var showInfo by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             DetailTopBar(content.info.name, showBack, onBack, subtitle = content.info.typeLabel) {
-                IconButton(onClick = { showInfo = !showInfo }) { Icon(Icons.Default.Info, "Details") }
-                IconButton(onClick = { Launch.openWith(context, content.file) }) { Icon(Icons.AutoMirrored.Filled.OpenInNew, "Open with") }
-                IconButton(onClick = { Launch.share(context, listOf(content.file)) }) { Icon(Icons.Default.Share, "Share") }
+                ViewerActions(vm, content.info, content.file) { showInfo = !showInfo }
             }
         },
     ) { padding ->
         TabletopLayout(
             modifier = Modifier.padding(padding),
-            top = { ZoomableImage(content.file) },
+            top = {
+                Box(Modifier.fillMaxSize()) {
+                    ZoomableImage(content.file)
+                    // Step through the other pictures in the folder without going back to the list.
+                    val listed = vm.items
+                    val siblings = remember(listed, target) {
+                        if (target is DetailTarget.Disk) vm.siblingImages(target.path) else emptyList()
+                    }
+                    val index = siblings.indexOfFirst { it.path == (target as? DetailTarget.Disk)?.path }
+                    if (index > 0) {
+                        FilledTonalIconButton(
+                            onClick = { vm.showDetail(DetailTarget.Disk(siblings[index - 1].path)) },
+                            modifier = Modifier.align(Alignment.CenterStart).padding(8.dp),
+                        ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous picture") }
+                    }
+                    if (index >= 0 && index < siblings.lastIndex) {
+                        FilledTonalIconButton(
+                            onClick = { vm.showDetail(DetailTarget.Disk(siblings[index + 1].path)) },
+                            modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp),
+                        ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next picture") }
+                    }
+                }
+            },
             bottom = { tabletop ->
                 if (tabletop || showInfo) {
                     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
@@ -203,10 +227,17 @@ private fun InfoActions(vm: BrowserViewModel, target: DetailTarget, info: FileIn
                 onBack()
             }
         }
+        if (file != null && kind == FileKind.APK) {
+            ActionButton("Install", Icons.Default.InstallMobile, primary = true) { Launch.install(context, file) }
+        }
         if (info.canOpenAsText) ActionButton("Open as text", Icons.AutoMirrored.Filled.Article) { vm.forceOpenAsText() }
         if (file != null && !info.isDirectory) {
-            ActionButton("Open with", Icons.AutoMirrored.Filled.OpenInNew, primary = !info.browsableArchive) { Launch.openWith(context, file) }
+            ActionButton("Open with", Icons.AutoMirrored.Filled.OpenInNew, primary = !info.browsableArchive && kind != FileKind.APK) {
+                Launch.openWith(context, file)
+            }
             ActionButton("Share", Icons.Default.Share) { Launch.share(context, listOf(file)) }
+            ActionButton("Checksums", Icons.Default.Fingerprint) { vm.dialog = BrowserDialog.Checksums(file) }
+            ActionButton("View bytes", Icons.Default.Memory) { vm.openAsHex(info) }
         }
         if (target is DetailTarget.Disk && kind == FileKind.ARCHIVE) {
             ActionButton("Extract…", Icons.Default.Unarchive) { vm.promptExtract(target.path) }
@@ -217,7 +248,7 @@ private fun InfoActions(vm: BrowserViewModel, target: DetailTarget, info: FileIn
 
 /** For a file inside an archive: pull it out next to the archive. */
 @Composable
-private fun EntryActions(vm: BrowserViewModel, target: DetailTarget) {
+internal fun EntryActions(vm: BrowserViewModel, target: DetailTarget) {
     if (target is DetailTarget.Entry) {
         ActionButton("Extract…", Icons.Default.Unarchive) {
             vm.promptExtract(target.archivePath, listOf(target.entryPath), ArchiveIndex.parentOf(target.entryPath))
@@ -238,7 +269,7 @@ private fun ActionButton(text: String, icon: ImageVector, primary: Boolean = fal
 }
 
 @Composable
-private fun InfoRows(rows: List<InfoRow>) {
+internal fun InfoRows(rows: List<InfoRow>) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         rows.forEach { row ->
             Column {

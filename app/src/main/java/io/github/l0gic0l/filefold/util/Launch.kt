@@ -26,6 +26,14 @@ object Launch {
         start(context, Intent.createChooser(intent, "Open with"))
     }
 
+    /** Hands an APK to Android's installer, which asks the user before installing anything. */
+    fun install(context: Context, file: File) {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uriFor(context, file), "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        start(context, intent)
+    }
+
     fun share(context: Context, files: List<File>) {
         val shareable = files.filter { it.isFile }
         if (shareable.isEmpty()) {

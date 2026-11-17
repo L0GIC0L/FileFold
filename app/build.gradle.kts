@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.l0gic0l.filefold"
         minSdk = 30
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -84,6 +84,8 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.coil.compose)
+    // Frames of videos as thumbnails.
+    implementation(libs.coil.video)
 
     implementation(libs.commons.compress)
     implementation(libs.xz)

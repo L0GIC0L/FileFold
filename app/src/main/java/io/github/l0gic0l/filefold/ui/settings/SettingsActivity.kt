@@ -204,6 +204,18 @@ private fun SettingsScreen(settings: AppSettings, repo: SettingsRepository, onBa
                 }
             }
             item { SwitchRow("Grid view", "Show files as tiles instead of a list", settings.gridView) { save { setGridView(it) } } }
+            item {
+                SwitchRow("Thumbnails", "Show pictures and video frames instead of type icons", settings.showThumbnails) {
+                    save { setShowThumbnails(it) }
+                }
+            }
+            item {
+                SwitchRow(
+                    "Trash",
+                    "Keep deleted items for ${io.github.l0gic0l.filefold.core.Trash.KEEP_DAYS} days so they can be restored",
+                    settings.useTrash,
+                ) { save { setUseTrash(it) } }
+            }
 
             // ---------------------------------------------------------- editor
             item { Section("Text editor") }
