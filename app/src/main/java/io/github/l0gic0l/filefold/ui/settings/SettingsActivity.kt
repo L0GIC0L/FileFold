@@ -236,6 +236,10 @@ private fun SettingsScreen(settings: AppSettings, repo: SettingsRepository, onBa
             item { Section("Auto-sort") }
             item { AutoSortSettings(settings) { config -> save { setAutoSort(config) } } }
 
+            // ---------------------------------------------------------- default file manager
+            item { Section("Default file manager") }
+            item { DefaultFileManagerSettings() }
+
             // ---------------------------------------------------------- about
             item { Section("About") }
             item {

@@ -1,8 +1,10 @@
 package io.github.l0gic0l.filefold
 
+import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Settings
 import android.view.KeyEvent
 import android.widget.Toast
@@ -48,6 +50,7 @@ import io.github.l0gic0l.filefold.ui.browser.BrowserViewModel
 import io.github.l0gic0l.filefold.ui.browser.Location
 import io.github.l0gic0l.filefold.ui.theme.FileFoldTheme
 import io.github.l0gic0l.filefold.util.Storage
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -61,6 +64,8 @@ class MainActivity : ComponentActivity() {
         SingletonImageLoader.setSafe { context ->
             ImageLoader.Builder(context).components { add(VideoFrameDecoder.Factory()) }.build()
         }
+        // Not when the activity is only being recreated: that link was already opened.
+        if (savedInstanceState == null) handleIntent(intent)
         setContent {
             // Nothing is drawn for the instant before settings are read, so the theme never flashes.
             val settings = rememberAppSettings() ?: return@setContent
@@ -75,6 +80,21 @@ class MainActivity : ComponentActivity() {
                     if (granted) FileFoldApp() else PermissionScreen(onGrant = ::requestAllFilesAccess)
                 }
             }
+        }
+    }
+
+    /** FileFold is already running and another app asks it to open something. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** Folders, downloads and files other apps ask FileFold to show; see the intent filters in the manifest. */
+    private fun handleIntent(intent: Intent?) {
+        when (intent?.action) {
+            DownloadManager.ACTION_VIEW_DOWNLOADS ->
+                browser.openFolderFromOutside(File(Storage.primaryRoot, Environment.DIRECTORY_DOWNLOADS).absolutePath)
+            Intent.ACTION_VIEW -> intent.data?.let { browser.openFromOutside(it, intent.type) }
         }
     }
 

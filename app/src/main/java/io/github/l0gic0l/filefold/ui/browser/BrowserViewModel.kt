@@ -1,6 +1,7 @@
 package io.github.l0gic0l.filefold.ui.browser
 
 import android.app.Application
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -36,6 +37,7 @@ import io.github.l0gic0l.filefold.ui.detail.EditorSession
 import io.github.l0gic0l.filefold.ui.detail.FileInfo
 import io.github.l0gic0l.filefold.ui.detail.InfoRow
 import io.github.l0gic0l.filefold.util.Format
+import io.github.l0gic0l.filefold.util.IncomingFiles
 import io.github.l0gic0l.filefold.util.Launch
 import io.github.l0gic0l.filefold.util.MediaInfo
 import io.github.l0gic0l.filefold.util.Place
@@ -64,6 +66,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     private val settingsRepo = SettingsRepository(app)
     private val previewCache = File(app.cacheDir, "preview")
+    private val appCache = app.cacheDir.path
 
     var settings by mutableStateOf(AppSettings())
         private set
@@ -392,6 +395,61 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         runSearch(p)
     }
 
+    // ------------------------------------------------------------ opened from other apps
+
+    /**
+     * Shows what another app asked FileFold to open: a folder, an archive to browse, or a file
+     * to view. Files that only exist inside the other app are copied first and opened read-only.
+     */
+    fun openFromOutside(uri: Uri, type: String?) = whenReady {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val file = withContext(Dispatchers.IO) { IncomingFiles.resolve(app, uri) }
+            when {
+                file != null && file.isDirectory -> showInTab(Location.Disk(file.absolutePath))
+                file != null -> openFileFromOutside(file, inPlace = !file.path.startsWith(app.cacheDir.path))
+                type?.lowercase() in IncomingFiles.folderTypes -> message("FileFold cannot reach this folder")
+                else -> try {
+                    val copy = withContext(Dispatchers.IO) { IncomingFiles.copyToCache(app, uri, File(app.cacheDir, OPENED_DIR)) }
+                    openFileFromOutside(copy, inPlace = false)
+                } catch (e: Exception) {
+                    message(e.message ?: "FileFold could not open this file")
+                }
+            }
+        }
+    }
+
+    /** Shows a folder another app asked for, such as Downloads. */
+    fun openFolderFromOutside(path: String) = whenReady { showInTab(Location.Disk(path)) }
+
+    /** [inPlace] is false for a copy, which is shown on its own rather than in a folder. */
+    private fun openFileFromOutside(file: File, inPlace: Boolean) {
+        when {
+            ArchiveFormat.fromName(file.name) != null -> showInTab(Location.InArchive(file.absolutePath, ""))
+            inPlace -> {
+                file.parent?.let { showInTab(Location.Disk(it)) }
+                showDetail(DetailTarget.Disk(file.absolutePath))
+            }
+            else -> showDetail(DetailTarget.Disk(file.absolutePath))
+        }
+    }
+
+    /** Shows [target] in the focused pane: in a tab that already has it, else in a new tab (or in place of a lone home tab). */
+    private fun showInTab(target: Location) {
+        val p = pane
+        val existing = p.tabs.firstOrNull { it.location == target }
+        when {
+            existing != null -> switchTab(existing.id, p)
+            p.tabs.size == 1 && p.location is Location.Home -> navigate(target, p)
+            else -> newTab(target, p)
+        }
+    }
+
+    /** Runs [action] now, or once the tabs from last time are back if that has not happened yet. */
+    private fun whenReady(action: () -> Unit) {
+        if (ready) action() else pendingOpen = action
+    }
+
     // ------------------------------------------------------------ favourites
 
     fun isFavorite(path: String): Boolean = path in settings.favorites
@@ -421,7 +479,9 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     /** Where "up" leads from [location]: the parent folder, the home page from the top of a volume, or null from home. */
     fun parentOf(location: Location): Location? = when (location) {
         is Location.InArchive ->
-            if (location.dir.isEmpty()) File(location.archivePath).parent?.let { Location.Disk(it) } ?: Location.Home
+            if (location.dir.isEmpty()) {
+                File(location.archivePath).parent?.takeUnless { it.startsWith(appCache) }?.let { Location.Disk(it) } ?: Location.Home
+            }
             else Location.InArchive(location.archivePath, ArchiveIndex.parentOf(location.dir))
         is Location.Disk -> {
             val root = Storage.volumeRootOf(volumes, location.path)
@@ -1323,7 +1383,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         if (!forceText && TextDocument.looksBinary(bytes)) {
             return info(note = "This does not look like a text file.", canOpenAsText = true)
         }
-        val writable = !readOnly && file.canWrite() && !Trash.isInTrash(file.path)
+        val writable = !readOnly && file.canWrite() && !Trash.isInTrash(file.path) && !file.path.startsWith(appCache)
         return DetailContent.Text(EditorSession(file, readOnly = !writable, TextDocument.decode(bytes)))
     }
 
