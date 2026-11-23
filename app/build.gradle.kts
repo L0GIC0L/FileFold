@@ -5,7 +5,11 @@ plugins {
 
 android {
     namespace = "io.github.l0gic0l.filefold"
-    compileSdk = 37
+    // Compose 1.13 needs the Android 17 QPR2 SDK (37.2) to compile against; this changes
+    // nothing about which devices the app runs on.
+    compileSdk {
+        version = release(37) { minorApiLevel = 2 }
+    }
 
     defaultConfig {
         applicationId = "io.github.l0gic0l.filefold"

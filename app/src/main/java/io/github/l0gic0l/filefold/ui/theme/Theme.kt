@@ -7,7 +7,9 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -48,6 +50,7 @@ fun ThemeSettings.isDark(): Boolean = when (mode) {
  * the user picks, spread into a full scheme with Google's Material colour
  * algorithm in the chosen style. File-type colours ride along in [LocalFileColors].
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun FileFoldTheme(
     theme: ThemeSettings = ThemeSettings(),
@@ -76,7 +79,9 @@ fun FileFoldTheme(
         onDispose { }
     }
 
-    MaterialTheme(colorScheme = colors) {
+    // Material 3 Expressive, the style of Android 16 and 17: springier motion and the expressive
+    // components (floating toolbars, shape-morphing loading indicator) styled to match.
+    MaterialExpressiveTheme(colorScheme = colors, motionScheme = MotionScheme.expressive()) {
         CompositionLocalProvider(LocalFileColors provides fileColors, content = content)
     }
 }
