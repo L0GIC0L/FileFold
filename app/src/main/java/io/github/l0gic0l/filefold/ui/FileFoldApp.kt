@@ -1,5 +1,6 @@
 package io.github.l0gic0l.filefold.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -203,6 +204,9 @@ private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) 
             }
         }
 
+        // Composed after the folders, so it wins over their back gesture: back closes an open drawer first.
+        BackHandler(enabled = !wide && drawerState.isOpen) { scope.launch { drawerState.close() } }
+
         SnackbarHost(
             snackbar,
             Modifier
@@ -315,7 +319,10 @@ private fun PlacesDrawer(vm: BrowserViewModel, onDone: () -> Unit) {
             label = { Text("Settings") },
             icon = { Icon(Icons.Default.Settings, null) },
             selected = false,
-            onClick = { openSettings(context) },
+            onClick = {
+                openSettings(context)
+                onDone()
+            },
         )
         Spacer(Modifier.height(16.dp))
     }

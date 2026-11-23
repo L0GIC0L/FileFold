@@ -43,7 +43,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.VerticalSplit
+import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
@@ -226,7 +226,7 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
             if (vm.isSplit) {
                 item("Close split view", Icons.Default.CloseFullscreen) { vm.closeSide(vm.panes.first { it !== vm.pane }) }
             } else {
-                item("Split view", Icons.Default.VerticalSplit) { vm.openSplit() }
+                item("Split view", Icons.Default.Splitscreen) { vm.openSplit() }
             }
             if (vm.location !is Location.Home) item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
             item("Refresh", Icons.Default.Refresh) { vm.refresh() }

@@ -127,6 +127,10 @@ private fun SettingsScreen(settings: AppSettings, repo: SettingsRepository, onBa
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // ---------------------------------------------------------- default file manager
+            item { Section("Default file manager") }
+            item { DefaultFileManagerSettings() }
+
             // ---------------------------------------------------------- appearance
             item { Section("Appearance") }
             item {
@@ -235,10 +239,6 @@ private fun SettingsScreen(settings: AppSettings, repo: SettingsRepository, onBa
             // ---------------------------------------------------------- auto-sort
             item { Section("Auto-sort") }
             item { AutoSortSettings(settings) { config -> save { setAutoSort(config) } } }
-
-            // ---------------------------------------------------------- default file manager
-            item { Section("Default file manager") }
-            item { DefaultFileManagerSettings() }
 
             // ---------------------------------------------------------- about
             item { Section("About") }

@@ -69,7 +69,13 @@ object IncomingFiles {
             }
             else -> null
         } ?: return null
-        return File(path).takeIf { it.exists() && it.canRead() }
+        // "/sdcard/…" is a link to the real volume; use the real path so breadcrumbs and "up" work.
+        val file = try {
+            File(path).canonicalFile
+        } catch (_: IOException) {
+            File(path)
+        }
+        return file.takeIf { it.exists() && it.canRead() }
     }
 
     private fun documentId(uri: Uri): String? = try {

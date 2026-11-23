@@ -36,9 +36,8 @@ import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.filled.RestoreFromTrash
-import androidx.compose.material.icons.filled.VerticalSplit
+import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -332,7 +332,8 @@ private fun TabStrip(vm: BrowserViewModel, p: FolderPane, split: Boolean, sideBy
             IconButton(onClick = { vm.closeSide(p) }) { Icon(Icons.Default.CloseFullscreen, "Close this side") }
         } else {
             IconButton(onClick = { vm.openSplit() }) {
-                Icon(if (sideBySide) Icons.Default.VerticalSplit else Icons.Default.HorizontalSplit, "Split view")
+                // Two stacked windows; turned on its side when the panes would sit side by side.
+                Icon(Icons.Default.Splitscreen, "Split view", Modifier.rotate(if (sideBySide) 90f else 0f))
             }
         }
     }
@@ -350,8 +351,9 @@ private fun TabDragOverlay(vm: BrowserViewModel, drag: TabDragState, origin: Off
             // The half where a second pane would open, shown as soon as the drag starts.
             DropZone(
                 splitZone(layout).translate(-origin),
-                label = "Drop to open side by side",
-                icon = if (layout.sideBySide) Icons.Default.VerticalSplit else Icons.Default.HorizontalSplit,
+                label = if (layout.sideBySide) "Drop to open alongside" else "Drop to open below",
+                icon = Icons.Default.Splitscreen,
+                iconRotation = if (layout.sideBySide) 90f else 0f,
                 active = target == TabDrop.Split,
             )
         } else {
@@ -385,25 +387,28 @@ private fun TabDragOverlay(vm: BrowserViewModel, drag: TabDragState, origin: Off
     }
 }
 
+/** Where a dragged tab can go: faint until the finger is over it, then solid, so the label always reads clearly. */
 @Composable
-private fun DropZone(bounds: Rect, label: String, icon: ImageVector, active: Boolean) {
+private fun DropZone(bounds: Rect, label: String, icon: ImageVector, active: Boolean, iconRotation: Float = 0f) {
     if (bounds.isEmpty) return
     val density = LocalDensity.current
     val shape = RoundedCornerShape(24.dp)
-    val color = MaterialTheme.colorScheme.primary
+    val scheme = MaterialTheme.colorScheme
+    val fill = if (active) scheme.primaryContainer else scheme.surfaceContainerHigh.copy(alpha = 0.92f)
+    val ink = if (active) scheme.onPrimaryContainer else scheme.primary
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .offset { IntOffset(bounds.left.roundToInt(), bounds.top.roundToInt()) }
             .size(with(density) { bounds.width.toDp() }, with(density) { bounds.height.toDp() })
             .padding(8.dp)
-            .background(color.copy(alpha = if (active) 0.24f else 0.08f), shape)
-            .border(2.dp, color.copy(alpha = if (active) 1f else 0.4f), shape),
+            .background(fill, shape)
+            .border(2.dp, scheme.primary.copy(alpha = if (active) 1f else 0.5f), shape),
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(40.dp))
+            Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(40.dp).rotate(iconRotation))
             Spacer(Modifier.height(8.dp))
-            Text(label, color = color, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            Text(label, color = ink, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
         }
     }
 }

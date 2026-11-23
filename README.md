@@ -7,6 +7,26 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
 
 ## Features
 
+**Home page**
+- How full each storage volume is, with a shortcut to its storage usage.
+- Categories: every image, video, audio file, document, archive or app on
+  internal storage in one tap, plus Downloads and large files.
+- The standard folders, your favourites and the trash, and the files that
+  changed in the last week.
+
+**Split view and tabs**
+- Two folders side by side (one above the other on a folded phone in
+  portrait). Copy in one and paste in the other.
+- **Drag tabs:** touch and hold a tab, then drag it to the far half of the
+  screen to open it in split view, onto the other side to move it there, or
+  along the strip to reorder. Dragging the last tab off one side closes that
+  side.
+- Or use the split button next to the tabs, or **Split view** in the menu.
+  The handle between the two sides resizes them.
+- The side you last touched is the one the top bar, menu and keyboard act on;
+  it has a coloured outline. Back moves up a folder on that side.
+- Tabs and split view are restored when you open the app again.
+
 **Browsing**
 - List and grid views, with thumbnails for photos and videos.
 - Breadcrumb path bar and pull to refresh.
@@ -23,10 +43,8 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
   the biggest first with a bar for its share, and shows how full the volume
   is. It stays on as you move between folders. The drawer shows free space
   for each volume.
-- **Tabs:** keep several folders or archives open at once. Use **New tab** in
-  the menu, or select a folder and choose **Open in new tab**. Each tab
-  remembers its own scroll positions, and your tabs are still there next time
-  you open the app.
+- Selected items get a floating toolbar at the bottom (copy, move, share,
+  rename, delete), within reach of your thumb.
 - Each folder remembers its scroll position when you come back to it, and
   folders you have already visited appear instantly.
 - **Predictive back:** as you swipe back, the current folder shrinks and slides
@@ -152,6 +170,25 @@ and close tab, **Ctrl+N** new folder, **Ctrl+H** hidden files, **Delete**,
   **Ctrl+G** / **Ctrl+Shift+G** jump to the next or previous match.
 - Asks before you leave a file with unsaved changes.
 
+## Default file manager
+
+Android has no single "default file manager" setting. Instead, each kind of
+item opens in whichever app you chose for it, and FileFold registers for:
+
+- **Folders** that other apps ask to show, and **View downloads** (from a
+  download notification, for example). They open in FileFold as a new tab.
+- **Files**: archives open to browse, and text, PDFs, pictures, audio and
+  video open in FileFold's viewers. A file that only exists inside another
+  app (an email attachment, say) is copied and opened read-only.
+- **Choosing files**: when an app asks you to pick a file to attach or upload,
+  FileFold is offered. It shows only the kinds of file the app accepts, and
+  lets you pick several when the app allows it.
+
+**Settings › Default file manager** shows which app opens each kind of item
+now. **Set** asks Android to choose: pick FileFold and tap **Always**. If
+another app was chosen with "Always" before, **Change** opens its app info,
+where *Open by default › Clear defaults* undoes that.
+
 ## Foldable support
 
 The layout follows the size and shape of the window, not the device model.
@@ -170,7 +207,9 @@ activity is never restarted for a size change.
 
 ## Building
 
-You need JDK 17 or newer and the Android SDK, with platform 37 installed.
+You need JDK 17 or newer and the Android SDK, with platform 37.2 (Android 17
+QPR2) installed. Compose 1.13 compiles against it; the app still runs on
+Android 11 and newer.
 
 ```sh
 ./gradlew assembleDebug          # app/build/outputs/apk/debug/app-debug.apk
@@ -202,8 +241,10 @@ app/src/main/java/io/github/l0gic0l/filefold/
 ├── util/       Formatting, storage volumes, handing files to other apps.
 └── ui/
     ├── FileFoldApp.kt   Adaptive layout: panes, drawer or rail, hinge handling.
-    ├── browser/         File list, dialogs, and the ViewModel holding all browsing state.
+    ├── browser/         Home page, folder panes and split view, dialogs, and the ViewModel
+    │                    holding all browsing state.
     ├── detail/          Text editor, image, PDF, media and hex viewers, file details.
+    ├── picker/          Choosing files for other apps.
     └── components/      File icons and the tabletop posture layout.
 ```
 
