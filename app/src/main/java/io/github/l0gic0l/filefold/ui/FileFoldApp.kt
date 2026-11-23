@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.DrawerValue
@@ -104,7 +105,10 @@ private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) 
     val wide = adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND)
     // Two panes from medium width up, which covers the inner screen of book-style foldables.
     // The default hinge policy keeps both panes clear of a separating hinge.
-    val directive = calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(adaptiveInfo)
+    // In split view the two folders take the whole width, and an opened file shows over them.
+    val directive = calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(adaptiveInfo).let {
+        if (vm.isSplit) it.copy(maxHorizontalPartitions = 1) else it
+    }
     val navigator = rememberListDetailPaneScaffoldNavigator<String>(scaffoldDirective = directive)
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -234,6 +238,12 @@ private fun PlacesDrawer(vm: BrowserViewModel, onDone: () -> Unit) {
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
         val open: (String) -> Unit = { vm.openPlace(it); onDone() }
+        NavigationDrawerItem(
+            label = { Text("Home") },
+            icon = { Icon(Icons.Default.Home, null) },
+            selected = vm.location is Location.Home,
+            onClick = { vm.openHome(); onDone() },
+        )
         val (volumes, shortcuts) = vm.places.partition { it.isVolume }
         volumes.forEach { place ->
             NavigationDrawerItem(
@@ -324,6 +334,12 @@ private fun PlacesRail(vm: BrowserViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(8.dp))
+            NavigationRailItem(
+                selected = vm.location is Location.Home,
+                onClick = { vm.openHome() },
+                icon = { Icon(Icons.Default.Home, null) },
+                label = { Text("Home") },
+            )
             vm.places.forEach { place ->
                 NavigationRailItem(
                     selected = place.path == current,

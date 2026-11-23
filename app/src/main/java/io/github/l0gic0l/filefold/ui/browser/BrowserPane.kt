@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
@@ -39,7 +41,9 @@ import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.VerticalSplit
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
@@ -67,7 +71,10 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingToolbarDefaults
+import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -128,13 +135,13 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             when {
-                vm.selectionMode -> SelectionBar(vm, inArchive)
+                vm.selectionMode -> SelectionBar(vm)
                 vm.search != null -> SearchBar(vm, title)
                 else -> TopAppBar(
                     title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         when {
-                            showMenuButton -> IconButton(onClick = onMenu) { Icon(Icons.Default.Menu, "Storage locations") }
+                            showMenuButton -> IconButton(onClick = onMenu) { Icon(Icons.Default.Menu, "Places") }
                             vm.canNavigateUp -> IconButton(onClick = { vm.navigateUp() }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Up one level")
                             }
@@ -156,10 +163,15 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
             ) { vm.clipboard?.let { PasteBar(vm, it) } }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
-            AnimatedVisibility(visible = vm.tabs.size > 1) { TabStrip(vm) }
-            vm.search?.let { SearchFilters(vm, it) }
-            FolderPages(vm, bottomPadding = padding.calculateBottomPadding())
+        Box(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
+            PaneArea(vm, bottomPadding = padding.calculateBottomPadding())
+            // Actions for the selection sit at the bottom, in reach of the thumb.
+            AnimatedVisibility(
+                visible = vm.selectionMode,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = padding.calculateBottomPadding() + 16.dp),
+            ) { SelectionToolbar(vm) }
         }
     }
 }
@@ -170,9 +182,9 @@ fun openSettings(context: Context) = context.startActivity(Intent(context, Setti
 @Composable
 private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
     val context = LocalContext.current
-    val inTrash = vm.location is Location.Trash
+    val listed = vm.location is Location.Disk || vm.location is Location.InArchive
     IconButton(onClick = vm::openSearch) { Icon(Icons.Default.Search, "Search") }
-    if (!inTrash) SortMenu(vm)
+    if (listed) SortMenu(vm)
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "More options") }
@@ -201,14 +213,22 @@ private fun BrowserActions(vm: BrowserViewModel, inArchive: Boolean) {
                 Location.Trash -> item("Empty trash…", Icons.Default.DeleteForever) {
                     if (vm.items.isEmpty()) vm.message("The trash is already empty") else vm.dialog = BrowserDialog.EmptyTrash
                 }
+                Location.Home -> Unit
             }
-            if (vm.settings.gridView) {
-                item("Show as list", Icons.AutoMirrored.Filled.ViewList) { vm.setGridView(false) }
-            } else {
-                item("Show as grid", Icons.Default.GridView) { vm.setGridView(true) }
+            if (listed) {
+                if (vm.settings.gridView) {
+                    item("Show as list", Icons.AutoMirrored.Filled.ViewList) { vm.setGridView(false) }
+                } else {
+                    item("Show as grid", Icons.Default.GridView) { vm.setGridView(true) }
+                }
             }
             item("New tab", Icons.Default.Tab) { vm.newTab() }
-            item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
+            if (vm.isSplit) {
+                item("Close split view", Icons.Default.CloseFullscreen) { vm.closeSide(vm.panes.first { it !== vm.pane }) }
+            } else {
+                item("Split view", Icons.Default.VerticalSplit) { vm.openSplit() }
+            }
+            if (vm.location !is Location.Home) item("Select all", Icons.Default.SelectAll) { vm.selectAll() }
             item("Refresh", Icons.Default.Refresh) { vm.refresh() }
             item("Settings", Icons.Default.Settings) { openSettings(context) }
             if (vm.location is Location.Disk) {
@@ -295,7 +315,7 @@ private fun SearchBar(vm: BrowserViewModel, folderName: String) {
 
 /** Under the search bar: narrow the search to a kind of file, to recent changes or to big files. */
 @Composable
-private fun SearchFilters(vm: BrowserViewModel, query: SearchQuery) {
+internal fun SearchFilters(vm: BrowserViewModel, query: SearchQuery) {
     Column {
         LazyRow(
             contentPadding = PaddingValues(horizontal = 12.dp),
@@ -339,9 +359,10 @@ private fun SearchFilters(vm: BrowserViewModel, query: SearchQuery) {
     }
 }
 
+/** The top bar while items are selected: how many, select all, and the less common actions. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
+private fun SelectionBar(vm: BrowserViewModel) {
     val selected = vm.selectedItems
     val single = selected.singleOrNull()
     TopAppBar(
@@ -349,27 +370,7 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
         navigationIcon = { IconButton(onClick = vm::clearSelection) { Icon(Icons.Default.Close, "Clear selection") } },
         title = { Text("${selected.size} selected") },
         actions = {
-            if (inArchive) {
-                val location = vm.location as Location.InArchive
-                IconButton(onClick = { vm.promptExtract(location.archivePath, selected.map { it.path }, location.dir) }) {
-                    Icon(Icons.Default.Unarchive, "Extract selected")
-                }
-                IconButton(onClick = { vm.copySelection(cut = false) }) { Icon(Icons.Default.ContentCopy, "Copy out of archive") }
-                if (single != null && single.isDirectory) {
-                    IconButton(onClick = { vm.openInNewTab(single) }) { Icon(Icons.Default.Tab, "Open in new tab") }
-                }
-                IconButton(onClick = vm::selectAll) { Icon(Icons.Default.SelectAll, "Select all") }
-                return@TopAppBar
-            }
-            if (vm.location is Location.Trash) {
-                IconButton(onClick = { vm.restoreFromTrash(selected) }) { Icon(Icons.Default.RestoreFromTrash, "Restore") }
-                IconButton(onClick = { vm.dialog = BrowserDialog.Delete(selected) }) { Icon(Icons.Default.DeleteForever, "Delete for good") }
-                IconButton(onClick = vm::selectAll) { Icon(Icons.Default.SelectAll, "Select all") }
-                return@TopAppBar
-            }
-            IconButton(onClick = { vm.copySelection(cut = false) }) { Icon(Icons.Default.ContentCopy, "Copy") }
-            IconButton(onClick = { vm.copySelection(cut = true) }) { Icon(Icons.Default.ContentCut, "Move") }
-            IconButton(onClick = { vm.dialog = BrowserDialog.Delete(selected) }) { Icon(Icons.Default.Delete, "Delete") }
+            IconButton(onClick = vm::selectAll) { Icon(Icons.Default.SelectAll, "Select all") }
             var open by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "More actions") }
@@ -378,44 +379,81 @@ private fun SelectionBar(vm: BrowserViewModel, inArchive: Boolean) {
                     fun action(text: String, icon: ImageVector, run: () -> Unit) =
                         DropdownMenuItem(text = { Text(text) }, leadingIcon = { Icon(icon, null) }, onClick = { open = false; run() })
 
-                    if (single != null && (single.isDirectory || ArchiveFormat.fromName(single.name) != null)) {
-                        action("Open in new tab", Icons.Default.Tab) { vm.openInNewTab(single) }
-                    }
-                    if (single != null && vm.search?.isActive == true) {
-                        action("Show in its folder", Icons.Default.FolderOpen) { vm.showInFolder(single) }
-                    }
-                    if (single != null) {
-                        action("Rename", Icons.Default.DriveFileRenameOutline) { vm.dialog = BrowserDialog.Rename(single) }
-                    } else {
-                        action("Rename all…", Icons.Default.DriveFileRenameOutline) { vm.dialog = BrowserDialog.BatchRename(selected) }
-                    }
-                    action("Compress…", Icons.Default.Compress) {
-                        vm.dialog = BrowserDialog.Compress(selected.map { File(it.path) }, suggestedArchiveName(vm, selected))
-                    }
-                    if (single != null && !single.isDirectory && ArchiveFormat.fromName(single.name) != null) {
-                        action("Extract…", Icons.Default.Unarchive) { vm.clearSelection(); vm.promptExtract(single.path) }
-                    }
-                    action("Share", Icons.Default.Share) { vm.share(selected) }
-                    if (single != null && !single.isDirectory) {
-                        action("Checksums…", Icons.Default.Fingerprint) { vm.clearSelection(); vm.dialog = BrowserDialog.Checksums(File(single.path)) }
-                    }
-                    if (single != null && single.isDirectory) {
-                        if (vm.isFavorite(single.path)) {
-                            action("Remove from favourites", Icons.Default.Star) { vm.toggleFavorite(single.path) }
-                        } else {
-                            action("Add to favourites", Icons.Default.StarBorder) { vm.toggleFavorite(single.path) }
+                    val location = vm.location
+                    if (location is Location.Disk) {
+                        if (single != null && (single.isDirectory || ArchiveFormat.fromName(single.name) != null)) {
+                            action("Open in new tab", Icons.Default.Tab) { vm.openInNewTab(single) }
+                        }
+                        if (single != null && vm.search?.isActive == true) {
+                            action("Show in its folder", Icons.Default.FolderOpen) { vm.showInFolder(single) }
+                        }
+                        action("Compress…", Icons.Default.Compress) {
+                            vm.dialog = BrowserDialog.Compress(selected.map { File(it.path) }, suggestedArchiveName(vm, selected))
+                        }
+                        if (single != null && !single.isDirectory && ArchiveFormat.fromName(single.name) != null) {
+                            action("Extract…", Icons.Default.Unarchive) { vm.clearSelection(); vm.promptExtract(single.path) }
+                        }
+                        if (single != null && !single.isDirectory) {
+                            action("Checksums…", Icons.Default.Fingerprint) { vm.clearSelection(); vm.dialog = BrowserDialog.Checksums(File(single.path)) }
+                        }
+                        if (single != null && single.isDirectory) {
+                            if (vm.isFavorite(single.path)) {
+                                action("Remove from favourites", Icons.Default.Star) { vm.toggleFavorite(single.path) }
+                            } else {
+                                action("Add to favourites", Icons.Default.StarBorder) { vm.toggleFavorite(single.path) }
+                            }
+                        }
+                        if (single != null) {
+                            action("Copy path", Icons.Default.Link) { vm.copyPath(single) }
+                            action("Details", Icons.Default.Info) { vm.clearSelection(); vm.showDetail(DetailTarget.Disk(single.path)) }
                         }
                     }
-                    if (single != null) {
-                        action("Copy path", Icons.Default.Link) { vm.copyPath(single) }
-                        action("Details", Icons.Default.Info) { vm.clearSelection(); vm.showDetail(DetailTarget.Disk(single.path)) }
+                    if (location is Location.InArchive && single != null && single.isDirectory) {
+                        action("Open in new tab", Icons.Default.Tab) { vm.openInNewTab(single) }
                     }
-                    action("Select all", Icons.Default.SelectAll) { vm.selectAll() }
                     action("Invert selection", Icons.Default.FlipToBack) { vm.invertSelection() }
                 }
             }
         },
     )
+}
+
+/** The main actions for the selection, in a floating toolbar at the bottom of the screen. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SelectionToolbar(vm: BrowserViewModel) {
+    val selected = vm.selectedItems
+    val single = selected.singleOrNull()
+    HorizontalFloatingToolbar(
+        expanded = true,
+        colors = FloatingToolbarDefaults.vibrantFloatingToolbarColors(),
+    ) {
+        @Composable
+        fun action(icon: ImageVector, label: String, run: () -> Unit) =
+            IconButton(onClick = run) { Icon(icon, label) }
+
+        when (val location = vm.location) {
+            is Location.InArchive -> {
+                action(Icons.Default.Unarchive, "Extract selected") { vm.promptExtract(location.archivePath, selected.map { it.path }, location.dir) }
+                action(Icons.Default.ContentCopy, "Copy out of archive") { vm.copySelection(cut = false) }
+            }
+            Location.Trash -> {
+                action(Icons.Default.RestoreFromTrash, "Restore") { vm.restoreFromTrash(selected) }
+                action(Icons.Default.DeleteForever, "Delete for good") { vm.dialog = BrowserDialog.Delete(selected) }
+            }
+            else -> {
+                action(Icons.Default.ContentCopy, "Copy") { vm.copySelection(cut = false) }
+                action(Icons.Default.ContentCut, "Move") { vm.copySelection(cut = true) }
+                action(Icons.Default.Share, "Share") { vm.share(selected) }
+                if (single != null) {
+                    action(Icons.Default.DriveFileRenameOutline, "Rename") { vm.dialog = BrowserDialog.Rename(single) }
+                } else {
+                    action(Icons.Default.DriveFileRenameOutline, "Rename all") { vm.dialog = BrowserDialog.BatchRename(selected) }
+                }
+                action(Icons.Default.Delete, "Delete") { vm.dialog = BrowserDialog.Delete(selected) }
+            }
+        }
+    }
 }
 
 private fun suggestedArchiveName(vm: BrowserViewModel, selected: List<FileItem>): String {

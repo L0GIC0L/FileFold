@@ -268,8 +268,8 @@ fun ArchiveBanner(session: ArchiveSession, onExtractAll: () -> Unit) {
 
 /** Shown at the top of the storage usage view: what this folder holds and how full the volume is. */
 @Composable
-fun StorageBanner(vm: BrowserViewModel) {
-    val volume = vm.currentVolume
+fun StorageBanner(vm: BrowserViewModel, p: FolderPane) {
+    val volume = vm.volumeOf(p)
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(20.dp),
@@ -278,7 +278,7 @@ fun StorageBanner(vm: BrowserViewModel) {
         Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (vm.sizing) "Adding up… ${Format.size(vm.sizeViewTotal)} so far" else "This folder holds ${Format.size(vm.sizeViewTotal)}",
+                    if (p.sizing) "Adding up… ${Format.size(p.sizeViewTotal)} so far" else "This folder holds ${Format.size(p.sizeViewTotal)}",
                     style = MaterialTheme.typography.titleSmall,
                 )
                 if (volume != null && volume.total > 0) {
@@ -296,7 +296,7 @@ fun StorageBanner(vm: BrowserViewModel) {
                     )
                 }
             }
-            TextButton(onClick = { vm.showSizes(false) }) { Text("Done") }
+            TextButton(onClick = { vm.focus(p); vm.showSizes(false) }) { Text("Done") }
         }
     }
 }

@@ -25,12 +25,17 @@ sealed interface Location {
         override val key: String get() = "trash:"
     }
 
+    /** The start page: storage, categories, favourites and recent files. */
+    data object Home : Location {
+        override val key: String get() = "home:"
+    }
+
     /** The path on disk: the folder itself, or the archive file for a folder inside an archive. Empty for the trash. */
     val diskPath: String
         get() = when (this) {
             is Disk -> path
             is InArchive -> archivePath
-            Trash -> ""
+            Trash, Home -> ""
         }
 
     /** True when this location lies somewhere inside [other], at any depth. */
@@ -38,7 +43,7 @@ sealed interface Location {
         is Disk -> diskPath.startsWith(other.path.trimEnd('/') + "/")
         is InArchive -> this is InArchive && archivePath == other.archivePath && dir != other.dir &&
             (other.dir.isEmpty() || dir.startsWith(other.dir + "/"))
-        Trash -> false
+        Trash, Home -> false
     }
 
     /** A string form for saving open tabs, read back by [decode]. */
@@ -46,6 +51,7 @@ sealed interface Location {
         is Disk -> "d:$path"
         is InArchive -> "a:$archivePath!/$dir"
         Trash -> "t:"
+        Home -> "h:"
     }
 
     companion object {
@@ -54,6 +60,7 @@ sealed interface Location {
             value.startsWith("a:") -> value.removePrefix("a:").split("!/", limit = 2)
                 .takeIf { it.size == 2 }?.let { InArchive(it[0], it[1]) }
             value == "t:" -> Trash
+            value == "h:" -> Home
             else -> null
         }
     }

@@ -2,7 +2,8 @@ package io.github.l0gic0l.filefold.ui.browser
 
 import android.app.Application
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -26,6 +27,7 @@ import io.github.l0gic0l.filefold.core.Progress
 import io.github.l0gic0l.filefold.core.SortOptions
 import io.github.l0gic0l.filefold.core.TextDocument
 import io.github.l0gic0l.filefold.data.AppSettings
+import io.github.l0gic0l.filefold.data.SavedPane
 import io.github.l0gic0l.filefold.data.SettingsRepository
 import io.github.l0gic0l.filefold.ui.detail.DetailContent
 import io.github.l0gic0l.filefold.ui.detail.DetailState
@@ -54,8 +56,9 @@ import java.io.File
 import java.io.IOException
 
 /**
- * State and actions for browsing. One instance serves both panes, so a
- * foldable can open, close or rotate without losing anything.
+ * State and actions for browsing. One instance serves the whole window, so a foldable can open,
+ * close or rotate without losing anything. The folder area holds one [FolderPane], or two in
+ * split view; the top bar, menus and keyboard act on the focused one.
  */
 class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -65,78 +68,59 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     var settings by mutableStateOf(AppSettings())
         private set
 
-    /** The active tab's folder. */
-    var location by mutableStateOf<Location>(Location.Disk(Storage.primaryRoot.absolutePath))
-        private set
-
     private var nextTabId = 1L
 
-    /** Open tabs, in display order. */
-    var tabs by mutableStateOf(listOf(BrowserTab(nextTabId++, location)))
-        private set
-    var activeTabId by mutableLongStateOf(tabs.first().id)
+    /** One pane, or two side by side in split view. */
+    var panes by mutableStateOf(listOf(FolderPane(listOf(BrowserTab(nextTabId++, Location.Home)))))
         private set
 
-    /** What the folder area is showing; transitions animate between pages. */
-    val page: Page get() = Page(activeTabId, location)
+    /** Which pane the top bar, menus and keyboard act on. */
+    var focusedIndex by mutableIntStateOf(0)
+        private set
+
+    val pane: FolderPane get() = panes[focusedIndex.coerceIn(0, panes.lastIndex)]
+    val isSplit: Boolean get() = panes.size > 1
+
+    // The focused pane, which the top bar and every action below work on.
+    val location: Location get() = pane.location
+    val tabs: List<BrowserTab> get() = pane.tabs
+    val activeTabId: Long get() = pane.activeTabId
+    val page: Page get() = pane.page
+    val items: List<FileItem> get() = pane.items
+    val loading: Boolean get() = pane.loading
+    val error: String? get() = pane.error
+    val search: SearchQuery? get() = pane.search
+    val searching: Boolean get() = pane.searching
+    val searchTruncated: Boolean get() = pane.searchTruncated
+    val sizeView: Boolean get() = pane.sizeView
+    val selection: Set<String> get() = pane.selection
+    val selectionMode: Boolean get() = pane.selectionMode
 
     /** Storage volumes (internal, SD card, USB) followed by the standard folders. Refreshed on resume. */
     var places by mutableStateOf(Storage.volumes(app) + Storage.shortcuts())
         private set
     private val volumes: List<Place> get() = places.filter { it.isVolume }
 
-    /** The current folder's contents, sorted and filtered. */
-    var items by mutableStateOf<List<FileItem>>(emptyList())
+    /** Files changed in the last week, newest first, for the home page; null until worked out. */
+    var recentFiles by mutableStateOf<List<FileItem>?>(null)
         private set
-    private var rawItems: List<FileItem> = emptyList()
-
-    var loading by mutableStateOf(false)
-        private set
-    var error by mutableStateOf<String?>(null)
-        private set
-
-    /** What is being searched for in this folder and everything below it; null when search is closed. */
-    var search by mutableStateOf<SearchQuery?>(null)
-        private set
-
-    /** True while a search is still walking the folders. */
-    var searching by mutableStateOf(false)
-        private set
-
-    /** True when a search stopped at [FileSearch.MAX_RESULTS]. */
-    var searchTruncated by mutableStateOf(false)
-        private set
-    private var searchResults: List<FileItem> = emptyList()
-    private var searchJob: Job? = null
-    private var searchGeneration = 0
-
-    /** Storage usage view: folders show the size of everything inside them and the biggest come first. */
-    var sizeView by mutableStateOf(false)
-        private set
-
-    /** True while folder sizes are still being added up. */
-    var sizing by mutableStateOf(false)
-        private set
-
-    /** Bytes used by everything listed in the storage usage view. */
-    var sizeViewTotal by mutableLongStateOf(0L)
-        private set
-    private var folderSizes: Map<String, Long> = emptyMap()
-    private var sizeJob: Job? = null
+    private var recentJob: Job? = null
 
     /** What is in the trash, by where each item sits now. */
     @Volatile
     private var trashEntries: Map<String, Trash.Entry> = emptyMap()
 
-    var selection by mutableStateOf<Set<String>>(emptySet())
-        private set
-    val selectionMode: Boolean get() = selection.isNotEmpty()
-
+    /** Shared by both panes, so items copied on one side can be pasted on the other. */
     var clipboard by mutableStateOf<Clipboard?>(null)
         private set
 
-    var archive by mutableStateOf<ArchiveSession?>(null)
-        private set
+    /** Open archives by path; their indexes are kept so moving between their folders is instant. */
+    private val archives = mutableStateMapOf<String, ArchiveSession>()
+
+    /** The archive the focused pane is in, if it is in one. */
+    val archive: ArchiveSession? get() = (location as? Location.InArchive)?.let { archives[it.archivePath] }
+
+    fun archiveFor(path: String): ArchiveSession? = archives[path]
 
     var dialog by mutableStateOf<BrowserDialog?>(null)
 
@@ -165,13 +149,17 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<FileItem>>?) = size > 48
     }
 
-    private var loadJob: Job? = null
     private var operationJob: Job? = null
     private var detailJob: Job? = null
+
+    /** False until the tabs from last time are back; something opened from another app waits for that. */
+    private var ready = false
+    private var pendingOpen: (() -> Unit)? = null
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
             previewCache.deleteRecursively()
+            File(app.cacheDir, OPENED_DIR).deleteRecursively()
             // Items that have sat in the trash for a month are removed for good.
             try {
                 Trash.purgeOlderThan(volumeRoots(), System.currentTimeMillis() - Trash.KEEP_DAYS * 86_400_000L)
@@ -185,47 +173,132 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 val old = settings
                 settings = new
                 when {
-                    first -> load()
+                    first -> {
+                        loadAll()
+                        ready = true
+                        pendingOpen?.invoke()
+                        pendingOpen = null
+                    }
                     new.showHidden != old.showHidden -> {
                         listingCache.clear()
-                        load()
+                        recentFiles = null
+                        loadAll()
                     }
-                    new.sort != old.sort -> applyFilterAndSort()
+                    new.sort != old.sort -> panes.forEach(::applyFilterAndSort)
                 }
                 first = false
             }
         }
     }
 
-    // ------------------------------------------------------------ navigation
+    // ------------------------------------------------------------ panes
 
-    fun navigate(to: Location) {
-        if (to == location) return
-        tabs = tabs.map { if (it.id == activeTabId) it.copy(location = to) else it }
-        show(to)
+    /** Makes [target] the pane the top bar and menus act on. Leaving a pane clears its selection. */
+    fun focus(target: FolderPane) {
+        val index = panes.indexOf(target)
+        if (index < 0 || index == focusedIndex) return
+        pane.selection = emptySet()
+        focusedIndex = index
     }
 
-    /** Switches the folder area to [to]: the cached listing at once if there is one, then a fresh one. */
-    private fun show(to: Location) {
-        location = to
-        selection = emptySet()
-        resetSearch()
-        error = null
+    /** Opens a second pane beside the first, showing [at]. With two panes open, focuses the other. */
+    fun openSplit(at: Location = location) {
+        if (isSplit) {
+            focus(panes.first { it !== pane })
+            return
+        }
+        addPane(FolderPane(listOf(BrowserTab(nextTabId++, at))))
+    }
+
+    /** Closes [side], adding its tabs to the pane that stays so nothing open is lost. */
+    fun closeSide(side: FolderPane = pane) {
+        if (!isSplit) return
+        val keep = panes.first { it !== side }
+        keep.tabs = keep.tabs + side.tabs
+        dropPane(side)
+    }
+
+    private fun addPane(p: FolderPane) {
+        panes = panes + p
+        pane.selection = emptySet()
+        focusedIndex = panes.lastIndex
+        p.rawItems = listingCache[p.location.key].orEmpty()
+        applyFilterAndSort(p)
+        load(p)
+        persistTabs()
+    }
+
+    private fun dropPane(p: FolderPane) {
+        p.cancelJobs()
+        panes = panes.filter { it !== p }
+        focusedIndex = 0
+        persistTabs()
+    }
+
+    /**
+     * Finishes dragging a tab out of [from]. [to] is the pane it was dropped on, at [index] in its
+     * strip, or null to open it in a second pane beside the first (split view).
+     */
+    fun moveTab(tabId: Long, from: FolderPane, to: FolderPane?, index: Int) {
+        val tab = from.tabs.firstOrNull { it.id == tabId } ?: return
+        when {
+            to == null -> when {
+                isSplit -> Unit
+                // Its only tab: show the same folder beside it rather than leave this side empty.
+                from.tabs.size == 1 -> openSplit(tab.location)
+                else -> {
+                    removeTab(from, tab)
+                    addPane(FolderPane(listOf(tab)))
+                }
+            }
+            to === from -> {
+                val tabs = from.tabs.toMutableList()
+                val old = tabs.indexOf(tab)
+                tabs.removeAt(old)
+                tabs.add((if (index > old) index - 1 else index).coerceIn(0, tabs.size), tab)
+                from.tabs = tabs
+                persistTabs()
+            }
+            else -> {
+                to.tabs = to.tabs.toMutableList().apply { add(index.coerceIn(0, size), tab) }
+                // A pane whose last tab is dragged away closes, and split view with it.
+                if (from.tabs.size == 1) dropPane(from) else removeTab(from, tab)
+                focus(to)
+                to.activeTabId = tab.id
+                show(to, tab.location)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ navigation
+
+    fun navigate(to: Location, p: FolderPane = pane) {
+        if (to == p.location) return
+        p.tabs = p.tabs.map { if (it.id == p.activeTabId) it.copy(location = to) else it }
+        show(p, to)
+    }
+
+    /** Switches [p] to [to]: the cached listing at once if there is one, then a fresh one. */
+    private fun show(p: FolderPane, to: Location) {
+        p.location = to
+        p.selection = emptySet()
+        resetSearch(p)
+        p.error = null
         // Never the previous folder's files: either this folder's last listing or nothing.
-        rawItems = listingCache[to.key].orEmpty()
-        applyFilterAndSort()
-        load()
+        p.rawItems = listingCache[to.key].orEmpty()
+        applyFilterAndSort(p)
+        load(p)
         persistTabs()
     }
 
     // ------------------------------------------------------------ tabs
 
     /** Opens a new tab at [at] (the current folder by default), right after the active tab. */
-    fun newTab(at: Location = location) {
+    fun newTab(at: Location = location, p: FolderPane = pane) {
         val tab = BrowserTab(nextTabId++, at)
-        val index = tabs.indexOfFirst { it.id == activeTabId }
-        tabs = tabs.toMutableList().apply { add(index + 1, tab) }
-        switchTab(tab.id)
+        val index = p.tabs.indexOfFirst { it.id == p.activeTabId }
+        p.tabs = p.tabs.toMutableList().apply { add(index + 1, tab) }
+        switchTab(tab.id, p)
     }
 
     /** Opens a folder or archive from the list in a new tab. */
@@ -240,23 +313,33 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         newTab(target)
     }
 
-    fun switchTab(id: Long) {
-        if (id == activeTabId) return
-        val tab = tabs.firstOrNull { it.id == id } ?: return
-        activeTabId = id
-        show(tab.location)
+    fun switchTab(id: Long, p: FolderPane = pane) {
+        focus(p)
+        if (id == p.activeTabId) return
+        val tab = p.tabs.firstOrNull { it.id == id } ?: return
+        p.activeTabId = id
+        show(p, tab.location)
     }
 
-    fun closeTab(id: Long) {
-        if (tabs.size <= 1) return
-        val index = tabs.indexOfFirst { it.id == id }.takeIf { it >= 0 } ?: return
-        val remaining = tabs.filterNot { it.id == id }
-        tabs = remaining
+    /** Closes a tab. Closing the last tab of one side of split view closes that side. */
+    fun closeTab(id: Long, p: FolderPane = pane) {
+        val tab = p.tabs.firstOrNull { it.id == id } ?: return
+        if (p.tabs.size <= 1) {
+            if (isSplit) dropPane(p)
+            return
+        }
+        removeTab(p, tab)
         scrollMemory.keys.removeAll { it.startsWith("$id|") }
-        if (id == activeTabId) {
+    }
+
+    private fun removeTab(p: FolderPane, tab: BrowserTab) {
+        val index = p.tabs.indexOf(tab)
+        val remaining = p.tabs - tab
+        p.tabs = remaining
+        if (tab.id == p.activeTabId) {
             val next = remaining[index.coerceAtMost(remaining.lastIndex)]
-            activeTabId = next.id
-            show(next.location)
+            p.activeTabId = next.id
+            show(p, next.location)
         } else {
             persistTabs()
         }
@@ -267,36 +350,46 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         is Location.Disk -> volumes.firstOrNull { it.path == loc.path }?.label ?: File(loc.path).name.ifEmpty { "/" }
         is Location.InArchive -> if (loc.dir.isEmpty()) File(loc.archivePath).name else ArchiveIndex.nameOf(loc.dir)
         Location.Trash -> "Trash"
+        Location.Home -> "Home"
     }
 
     private fun persistTabs() {
-        val saved = tabs.map { it.location.encode() }
-        val active = tabs.indexOfFirst { it.id == activeTabId }.coerceAtLeast(0)
-        viewModelScope.launch { settingsRepo.setTabs(saved, active) }
+        val saved = panes.map { p -> SavedPane(p.tabs.map { it.location.encode() }, p.tabs.indexOfFirst { it.id == p.activeTabId }.coerceAtLeast(0)) }
+        val focused = focusedIndex
+        viewModelScope.launch { settingsRepo.setTabs(saved, focused) }
     }
 
-    /** Reopens the tabs from last time, skipping folders that have since gone. */
+    /** Reopens the tabs (and split view) from last time, skipping folders that have since gone. */
     private suspend fun restoreTabs() {
         val saved = settingsRepo.savedTabs.first()
         val restored = withContext(Dispatchers.IO) {
-            saved.tabs.mapNotNull(Location::decode).filter { it is Location.Trash || File(it.diskPath).exists() }
+            saved.panes.map { pane ->
+                pane to pane.tabs.mapNotNull(Location::decode).filter { it is Location.Trash || it is Location.Home || File(it.diskPath).exists() }
+            }.filter { it.second.isNotEmpty() }
         }
         if (restored.isEmpty()) return
-        tabs = restored.map { BrowserTab(nextTabId++, it) }
-        val active = tabs[saved.active.coerceIn(0, tabs.lastIndex)]
-        activeTabId = active.id
-        location = active.location
+        panes = restored.map { (savedPane, locations) ->
+            val tabs = locations.map { BrowserTab(nextTabId++, it) }
+            FolderPane(tabs, tabs[savedPane.active.coerceIn(0, tabs.lastIndex)].id)
+        }
+        focusedIndex = saved.focused.coerceIn(0, panes.lastIndex)
     }
 
     fun openPlace(path: String) = navigate(Location.Disk(path))
 
+    fun openHome() = navigate(Location.Home)
+
     fun openTrash() = navigate(Location.Trash)
 
     /** Everything changed in the last few days, anywhere on internal storage, newest first. */
-    fun openRecent() {
-        navigate(Location.Disk(Storage.primaryRoot.absolutePath))
-        search = SearchQuery(recent = true)
-        runSearch()
+    fun openRecent() = openCategory(SearchQuery(recent = true))
+
+    /** Every file of a kind (or matching [query]) on internal storage, as a search from its top. */
+    fun openCategory(query: SearchQuery) {
+        val p = pane
+        navigate(Location.Disk(Storage.primaryRoot.absolutePath), p)
+        p.search = query
+        runSearch(p)
     }
 
     // ------------------------------------------------------------ favourites
@@ -314,26 +407,28 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     /** Called when the app returns to the foreground: storage may have been plugged in and files changed elsewhere. */
     fun onResume() {
         places = Storage.volumes(getApplication()) + Storage.shortcuts()
-        if (operationJob?.isActive != true) load()
+        recentFiles = recentFiles?.filter { File(it.path).exists() }
+        if (operationJob?.isActive != true) loadAll()
     }
 
-    /** Goes one level up. Returns false at the top of a storage volume. */
-    fun navigateUp(): Boolean {
-        val parent = parentOf(location) ?: return false
-        navigate(parent)
+    /** Goes one level up. Returns false when there is nowhere further up. */
+    fun navigateUp(p: FolderPane = pane): Boolean {
+        val parent = parentOf(p.location) ?: return false
+        navigate(parent, p)
         return true
     }
 
-    private fun parentOf(location: Location): Location? = when (location) {
+    /** Where "up" leads from [location]: the parent folder, the home page from the top of a volume, or null from home. */
+    fun parentOf(location: Location): Location? = when (location) {
         is Location.InArchive ->
-            if (location.dir.isEmpty()) Location.Disk(File(location.archivePath).parent ?: return null)
+            if (location.dir.isEmpty()) File(location.archivePath).parent?.let { Location.Disk(it) } ?: Location.Home
             else Location.InArchive(location.archivePath, ArchiveIndex.parentOf(location.dir))
         is Location.Disk -> {
             val root = Storage.volumeRootOf(volumes, location.path)
-            if (root == null || location.path == root) null else File(location.path).parent?.let { Location.Disk(it) }
+            if (root == null || location.path == root) Location.Home else File(location.path).parent?.let { Location.Disk(it) }
         }
-        // Leaving the trash goes back to the top of internal storage.
-        Location.Trash -> Location.Disk(Storage.primaryRoot.absolutePath)
+        Location.Trash -> Location.Home
+        Location.Home -> null
     }
 
     private fun volumeRoots(): List<File> = volumes.map { File(it.path) }
@@ -342,7 +437,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     val canNavigateUp: Boolean get() = parentOf(location) != null
 
-    /** Where "up" leads from the current folder, or null at the top of a volume. */
+    /** Where "up" leads from the focused pane's folder. */
     val parentLocation: Location? get() = parentOf(location)
 
     /** Handles the back gesture in the browser. Returns false when there is nothing left to undo. */
@@ -353,8 +448,10 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun breadcrumbs(loc: Location = location): List<Crumb> {
-        if (loc is Location.Trash) return listOf(Crumb("Trash", loc))
-        val crumbs = ArrayList<Crumb>()
+        val home = Crumb("Home", Location.Home)
+        if (loc is Location.Home) return listOf(home)
+        if (loc is Location.Trash) return listOf(home, Crumb("Trash", loc))
+        val crumbs = arrayListOf(home)
         val diskPath = loc.diskPath
         val root = Storage.volumeRootOf(volumes, diskPath)
         if (root != null) {
@@ -379,14 +476,14 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         return crumbs
     }
 
-    /** What happens when an item is tapped. */
+    /** What happens when an item is tapped in the focused pane. */
     fun open(item: FileItem) {
         if (selectionMode) {
             toggleSelection(item)
             return
         }
         when (val loc = location) {
-            is Location.Disk -> when {
+            is Location.Disk, Location.Home -> when {
                 item.isDirectory -> navigate(Location.Disk(item.path))
                 ArchiveFormat.fromName(item.name) != null -> navigate(Location.InArchive(item.path, ""))
                 else -> showDetail(DetailTarget.Disk(item.path))
@@ -402,7 +499,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     /** Leaves a search to show the folder that holds [item]. */
     fun showInFolder(item: FileItem) {
         when (val loc = location) {
-            is Location.Disk -> File(item.path).parent?.let { navigate(Location.Disk(it)) }
+            is Location.Disk, Location.Home -> File(item.path).parent?.let { navigate(Location.Disk(it)) }
             is Location.InArchive -> navigate(Location.InArchive(loc.archivePath, ArchiveIndex.parentOf(item.path)))
             Location.Trash -> Unit
         }
@@ -414,18 +511,21 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ loading
 
     fun refresh() {
-        folderSizes = emptyMap()
-        load()
+        pane.folderSizes = emptyMap()
+        if (location is Location.Home) recentFiles = null
+        load(pane)
     }
 
-    private fun load() {
-        loadJob?.cancel()
-        val target = location
-        loadJob = viewModelScope.launch {
-            loading = true
+    private fun loadAll() = panes.forEach(::load)
+
+    private fun load(p: FolderPane) {
+        p.loadJob?.cancel()
+        val target = p.location
+        p.loadJob = viewModelScope.launch {
+            p.loading = true
             try {
                 var problem: String? = null
-                rawItems = when (target) {
+                p.rawItems = when (target) {
                     is Location.Disk -> withContext(Dispatchers.IO) { FileOps.list(File(target.path), settings.showHidden) }
                     is Location.InArchive -> {
                         val session = openArchive(target.archivePath)
@@ -446,22 +546,43 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                             entries.map { FileOps.toItem(it.file).copy(name = it.originalName, modified = it.deletedAt) }
                         }
                     }
+                    Location.Home -> {
+                        loadRecent()
+                        emptyList()
+                    }
                 }
-                error = problem
-                if (problem == null) listingCache[target.key] = rawItems
+                p.error = problem
+                if (problem == null) listingCache[target.key] = p.rawItems
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                rawItems = emptyList()
+                p.rawItems = emptyList()
                 listingCache.remove(target.key)
-                error = e.message ?: "Could not open this folder"
+                p.error = e.message ?: "Could not open this folder"
             } finally {
-                loading = false
+                p.loading = false
             }
-            applyFilterAndSort()
-            if (search?.isActive == true) runSearch()
-            computeSizes()
+            applyFilterAndSort(p)
+            if (p.search?.isActive == true) runSearch(p)
+            computeSizes(p)
             prefetchParent(target)
+        }
+    }
+
+    /** Finds the files changed in the last week for the home page, unless that is already done. */
+    private fun loadRecent() {
+        if (recentFiles != null || recentJob?.isActive == true) return
+        val showHidden = settings.showHidden
+        recentJob = viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                val all = ArrayList<FileItem>()
+                try {
+                    FileSearch.search(Storage.primaryRoot, SearchQuery(recent = true), showHidden) { all += it }
+                } catch (_: IOException) {
+                }
+                all.sortedByDescending { it.modified }.take(RECENT_ON_HOME)
+            }
+            recentFiles = found
         }
     }
 
@@ -472,8 +593,8 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         val listing = try {
             when (parent) {
                 is Location.Disk -> withContext(Dispatchers.IO) { FileOps.list(File(parent.path), settings.showHidden) }
-                is Location.InArchive -> archive?.takeIf { it.file.path == parent.archivePath }?.index?.list(parent.dir)
-                Location.Trash -> null
+                is Location.InArchive -> archives[parent.archivePath]?.index?.list(parent.dir)
+                Location.Trash, Location.Home -> null
             }
         } catch (e: IOException) {
             null
@@ -481,30 +602,44 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         listingCache[parent.key] = listing
     }
 
-    /** What to draw for [loc] while it animates in or out: live for the current folder, cached otherwise. */
-    fun itemsFor(loc: Location): List<FileItem> =
-        if (loc == location) items else listingCache[loc.key]?.sortedWith(settings.sort.comparator()).orEmpty()
+    /** What to draw for [loc] while it animates in or out of [p]: live for its current folder, cached otherwise. */
+    fun itemsFor(loc: Location, p: FolderPane): List<FileItem> =
+        if (loc == p.location) p.items else listingCache[loc.key]?.sortedWith(settings.sort.comparator()).orEmpty()
 
     /**
      * Returns the cached session for an archive, reading its index when it is
      * new or has changed on disk. Asks for a password when the index itself is
      * encrypted; returns null if the user gives up.
      */
-    private suspend fun openArchive(path: String, password: String? = archive?.takeIf { it.file.path == path }?.password): ArchiveSession? {
+    private suspend fun openArchive(path: String, password: String? = archives[path]?.password): ArchiveSession? {
         val file = File(path)
-        archive?.let { if (it.file.path == path && it.lastModified == file.lastModified()) return it }
+        archives[path]?.let { if (it.lastModified == file.lastModified()) return it }
         val format = withContext(Dispatchers.IO) { ArchiveFormat.of(file) }
             ?: throw IOException("This is not an archive FileFold can read")
         return try {
             val entries = withContext(Dispatchers.IO) { Archives.list(file, format, password) }
-            ArchiveSession(file, format, ArchiveIndex(format, entries), password, file.lastModified()).also { archive = it }
+            ArchiveSession(file, format, ArchiveIndex(format, entries), password, file.lastModified()).also(::keepArchive)
         } catch (e: ArchivePasswordException) {
+            val showing = { p: FolderPane -> (p.location as? Location.InArchive)?.archivePath == path }
             requestPassword(file.name, wrong = password != null,
-                onSubmit = { pw -> viewModelScope.launch { if (openArchive(path, pw) != null) load() } },
-                onCancel = { if (location is Location.InArchive) navigate(parentOf(Location.InArchive(path, ""))!!) },
+                onSubmit = { pw -> viewModelScope.launch { if (openArchive(path, pw) != null) panes.filter(showing).forEach(::load) } },
+                onCancel = { panes.filter(showing).forEach { p -> navigate(parentOf(Location.InArchive(path, ""))!!, p) } },
             )
             null
         }
+    }
+
+    /** Remembers an archive's index, forgetting ones no pane is showing once there are a few. */
+    private fun keepArchive(session: ArchiveSession) {
+        archives[session.file.path] = session
+        if (archives.size > 3) {
+            val inUse = panes.mapNotNull { (it.location as? Location.InArchive)?.archivePath }.toSet() + session.file.path
+            archives.keys.filter { it !in inUse }.forEach { archives.remove(it) }
+        }
+    }
+
+    private fun updatePassword(path: String, password: String) {
+        archives[path]?.let { archives[path] = it.copy(password = password) }
     }
 
     private fun requestPassword(name: String, wrong: Boolean, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
@@ -514,84 +649,86 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private fun applyFilterAndSort() {
-        val query = search?.takeIf { it.isActive }
-        val usage = sizeView && query == null && location is Location.Disk
+    private fun applyFilterAndSort(p: FolderPane) {
+        val query = p.search?.takeIf { it.isActive }
+        val usage = p.sizeView && query == null && p.location is Location.Disk
         val source = when {
-            query != null -> searchResults
-            usage -> rawItems.map { if (it.isDirectory) it.copy(size = folderSizes[it.path] ?: 0) else it }
-            else -> rawItems
+            query != null -> p.searchResults
+            usage -> p.rawItems.map { if (it.isDirectory) it.copy(size = p.folderSizes[it.path] ?: 0) else it }
+            else -> p.rawItems
         }
         val byName = Comparator<FileItem> { a, b -> NaturalOrder.compare(a.name, b.name) }
         val order = when {
-            query?.recent == true || location is Location.Trash -> compareByDescending<FileItem> { it.modified }.then(byName)
+            query?.recent == true || p.location is Location.Trash -> compareByDescending<FileItem> { it.modified }.then(byName)
             query?.large == true || usage -> compareByDescending<FileItem> { it.size }.then(byName)
             else -> settings.sort.comparator()
         }
-        items = source.sortedWith(order)
-        sizeViewTotal = if (usage) source.sumOf { it.size } else 0L
+        p.items = source.sortedWith(order)
+        p.sizeViewTotal = if (usage) source.sumOf { it.size } else 0L
         // Drop selected paths that are no longer listed, e.g. after a delete.
         val present = source.mapTo(HashSet()) { it.path }
-        if (selection.any { it !in present }) selection = selection.filterTo(HashSet()) { it in present }
+        if (p.selection.any { it !in present }) p.selection = p.selection.filterTo(HashSet()) { it in present }
     }
 
     // ------------------------------------------------------------ search, sort, view
 
+    /** Opens search in the focused pane; from the home page it searches all of internal storage. */
     fun openSearch() {
-        search = SearchQuery()
+        if (location is Location.Home) navigate(Location.Disk(Storage.primaryRoot.absolutePath))
+        pane.search = SearchQuery()
     }
 
     fun updateSearch(query: SearchQuery) {
         val typing = query.text != search?.text
-        search = query
-        runSearch(debounce = typing)
+        pane.search = query
+        runSearch(pane, debounce = typing)
     }
 
     fun closeSearch() {
-        resetSearch()
-        applyFilterAndSort()
+        resetSearch(pane)
+        applyFilterAndSort(pane)
     }
 
-    private fun resetSearch() {
-        searchJob?.cancel()
-        searchGeneration++
-        search = null
-        searching = false
-        searchTruncated = false
-        searchResults = emptyList()
+    private fun resetSearch(p: FolderPane) {
+        p.searchJob?.cancel()
+        p.searchGeneration++
+        p.search = null
+        p.searching = false
+        p.searchTruncated = false
+        p.searchResults = emptyList()
     }
 
     /**
-     * Searches the current folder and everything below it. Matches are shown as they are
+     * Searches [p]'s folder and everything below it. Matches are shown as they are
      * found. While typing, what is already listed is narrowed at once and the walk starts
      * after a short pause, so each keystroke does not start a search of its own.
      */
-    private fun runSearch(debounce: Boolean = false) {
-        searchJob?.cancel()
-        val generation = ++searchGeneration
-        val query = search?.takeIf { it.isActive }
-        searchTruncated = false
+    private fun runSearch(p: FolderPane, debounce: Boolean = false) {
+        p.searchJob?.cancel()
+        val generation = ++p.searchGeneration
+        val query = p.search?.takeIf { it.isActive }
+        p.searchTruncated = false
         if (query == null) {
-            searching = false
-            searchResults = emptyList()
-            applyFilterAndSort()
+            p.searching = false
+            p.searchResults = emptyList()
+            applyFilterAndSort(p)
             return
         }
         val now = System.currentTimeMillis()
         fun matches(item: FileItem) = query.matches(item.name, item.isDirectory, item.size, item.modified, now)
-        searchResults = searchResults.filter(::matches)
-        applyFilterAndSort()
-        searching = true
-        val target = location
-        searchJob = viewModelScope.launch {
+        p.searchResults = p.searchResults.filter(::matches)
+        applyFilterAndSort(p)
+        p.searching = true
+        val target = p.location
+        p.searchJob = viewModelScope.launch {
             if (debounce) delay(250)
             // Only touched on the main thread; batches from the walk are posted here in order.
             val found = ArrayList<FileItem>()
             fun deliver(batch: List<FileItem>) {
-                if (generation != searchGeneration) return
+                if (generation != p.searchGeneration) return
                 found += batch
-                searchResults = found.toList()
-                applyFilterAndSort()
+                p.searchResults = found.toList()
+                applyFilterAndSort(p)
             }
             try {
                 when (target) {
@@ -603,77 +740,87 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                                 viewModelScope.launch { deliver(batch) }
                             }
                         }
-                        if (generation == searchGeneration) searchTruncated = truncated
+                        if (generation == p.searchGeneration) p.searchTruncated = truncated
                     }
-                    is Location.InArchive -> archive?.takeIf { it.file.path == target.archivePath }?.let { session ->
+                    is Location.InArchive -> archives[target.archivePath]?.let { session ->
                         deliver(session.index.search(target.dir, FileSearch.MAX_RESULTS, ::matches))
                     }
-                    Location.Trash -> deliver(rawItems.filter(::matches))
+                    Location.Trash -> deliver(p.rawItems.filter(::matches))
+                    Location.Home -> Unit
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 // A folder that cannot be walked just ends the search with what was found.
             }
-            if (generation == searchGeneration) {
+            if (generation == p.searchGeneration) {
                 // Replaces the narrowed-down old results, also when nothing at all was found.
-                searchResults = found.toList()
-                searching = false
-                applyFilterAndSort()
+                p.searchResults = found.toList()
+                p.searching = false
+                applyFilterAndSort(p)
             }
         }
     }
 
-    /** Extra text under a file's name: where a search result or a trashed item lives. */
-    fun hintFor(item: FileItem): String? = when (val loc = location) {
+    /** Extra text under a file's name in [p]: where a search result or a trashed item lives. */
+    fun hintFor(p: FolderPane, item: FileItem): String? = when (val loc = p.location) {
         Location.Trash -> trashEntries[item.path]?.let { "from ${File(it.originalPath).parentFile?.name ?: "/"}" }
-        is Location.Disk -> if (search?.isActive != true) null else {
+        is Location.Disk -> if (p.search?.isActive != true) null else {
             val parent = File(item.path).parent.orEmpty()
             if (parent == loc.path) null else "in ${parent.removePrefix(loc.path).trimStart('/')}"
         }
-        is Location.InArchive -> if (search?.isActive != true) null else {
+        is Location.InArchive -> if (p.search?.isActive != true) null else {
             val parent = ArchiveIndex.parentOf(item.path)
             if (parent == loc.dir) null else "in ${parent.removePrefix(loc.dir).trimStart('/')}"
         }
+        Location.Home -> null
     }
 
     // ------------------------------------------------------------ storage usage
 
-    /** Turns the storage usage view on or off. It stays on while moving between folders. */
+    /** Turns the storage usage view of the focused pane on or off. It stays on while moving between folders. */
     fun showSizes(on: Boolean) {
-        sizeView = on
+        val p = pane
+        p.sizeView = on
         if (!on) {
-            sizeJob?.cancel()
-            sizing = false
-            folderSizes = emptyMap()
+            p.sizeJob?.cancel()
+            p.sizing = false
+            p.folderSizes = emptyMap()
         }
-        applyFilterAndSort()
-        computeSizes()
+        applyFilterAndSort(p)
+        computeSizes(p)
     }
 
-    /** Adds up the folders in the current listing one by one, re-sorting as each size comes in. */
-    private fun computeSizes() {
-        sizeJob?.cancel()
-        sizing = false
-        if (!sizeView || location !is Location.Disk) return
-        val pending = rawItems.filter { it.isDirectory && it.path !in folderSizes }
+    /** Opens a storage volume with the storage usage view on. */
+    fun analyse(volume: Place) {
+        openPlace(volume.path)
+        showSizes(true)
+    }
+
+    /** Adds up the folders in [p]'s listing one by one, re-sorting as each size comes in. */
+    private fun computeSizes(p: FolderPane) {
+        p.sizeJob?.cancel()
+        p.sizing = false
+        if (!p.sizeView || p.location !is Location.Disk) return
+        val pending = p.rawItems.filter { it.isDirectory && it.path !in p.folderSizes }
         if (pending.isEmpty()) return
-        sizing = true
-        sizeJob = viewModelScope.launch {
+        p.sizing = true
+        p.sizeJob = viewModelScope.launch {
             for (dir in pending) {
                 val size = withContext(Dispatchers.IO) {
                     val job = coroutineContext.job
                     FileSearch.folderSize(File(dir.path), Progress(isActive = { job.isActive }))
                 }
-                folderSizes = folderSizes + (dir.path to size)
-                applyFilterAndSort()
+                p.folderSizes = p.folderSizes + (dir.path to size)
+                applyFilterAndSort(p)
             }
-            sizing = false
+            p.sizing = false
         }
     }
 
-    /** The storage volume the current folder is on. */
-    val currentVolume: Place? get() = Storage.volumeRootOf(volumes, location.diskPath)?.let { root -> volumes.firstOrNull { it.path == root } }
+    /** The storage volume [p]'s folder is on. */
+    fun volumeOf(p: FolderPane): Place? =
+        Storage.volumeRootOf(volumes, p.location.diskPath)?.let { root -> volumes.firstOrNull { it.path == root } }
 
     fun setSort(sort: SortOptions) = viewModelScope.launch { settingsRepo.setSort(sort) }
     fun setShowHidden(value: Boolean) = viewModelScope.launch { settingsRepo.setShowHidden(value) }
@@ -686,19 +833,19 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ selection
 
     fun toggleSelection(item: FileItem) {
-        selection = if (item.path in selection) selection - item.path else selection + item.path
+        pane.selection = if (item.path in selection) selection - item.path else selection + item.path
     }
 
     fun selectAll() {
-        selection = items.mapTo(HashSet()) { it.path }
+        pane.selection = items.mapTo(HashSet()) { it.path }
     }
 
     fun clearSelection() {
-        selection = emptySet()
+        pane.selection = emptySet()
     }
 
     fun invertSelection() {
-        selection = items.mapNotNullTo(HashSet()) { item -> item.path.takeIf { it !in selection } }
+        pane.selection = items.mapNotNullTo(HashSet()) { item -> item.path.takeIf { it !in selection } }
     }
 
     /** Puts the full path of [item] on the system clipboard. */
@@ -722,7 +869,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 val session = archive ?: return
                 Clipboard.Entries(session.file, session.format, session.password, selected.map { it.path }, loc.dir)
             }
-            Location.Trash -> return
+            Location.Trash, Location.Home -> return
         }
         clearSelection()
         val verb = when {
@@ -805,7 +952,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                             } catch (e: IOException) {
                                 message(e.message ?: "Could not restore")
                             }
-                            load()
+                            loadAll()
                         }
                     }
                 }
@@ -858,13 +1005,13 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                         } catch (e: IOException) {
                             message(e.message ?: "Could not undo the rename")
                         }
-                        load()
+                        loadAll()
                     }
                 }
             } catch (e: IOException) {
                 message(e.message ?: "Could not rename")
             }
-            load()
+            loadAll()
         }
     }
 
@@ -883,7 +1030,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val file = File(archivePath)
             val session = try {
-                if (archive?.file?.path == archivePath) archive else openArchive(archivePath)
+                archives[archivePath] ?: openArchive(archivePath)
             } catch (e: IOException) {
                 message(e.message ?: "Could not read archive")
                 null
@@ -910,7 +1057,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         runOperation(
             "Extracting",
             onPassword = { pw ->
-                if (archive?.file == archiveFile) archive = archive?.copy(password = pw)
+                updatePassword(archiveFile.path, pw)
                 extract(archiveFile, format, pw, dest, entries, baseDir, onDone)
             },
             archiveName = archiveFile.name,
@@ -929,7 +1076,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmExtract(dialog: BrowserDialog.Extract, folderName: String?) {
         val parent = dialog.archive.parentFile ?: return
         val dest = if (folderName == null) parent else FileOps.uniqueTarget(parent, folderName)
-        val password = archive?.takeIf { it.file == dialog.archive }?.password
+        val password = archives[dialog.archive.path]?.password
         extract(dialog.archive, dialog.format, password, dest, dialog.entries, dialog.baseDir)
     }
 
@@ -956,7 +1103,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                     viewModelScope.launch {
                         val restored = withContext(Dispatchers.IO) { AutoSorter.undo(result) }
                         message("Restored ${plural(restored, "item")}")
-                        load()
+                        loadAll()
                     }
                 }
             }
@@ -979,7 +1126,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: IOException) {
                 message(e.message ?: "Something went wrong")
             }
-            load()
+            loadAll()
         }
     }
 
@@ -1022,11 +1169,11 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 message(e.message ?: "$title failed")
             } finally {
                 _operation.value = null
-                folderSizes = emptyMap()
+                panes.forEach { it.folderSizes = emptyMap() }
                 // The open file may just have been deleted, moved or trashed.
                 val open = detail?.takeIf { !it.isDirty }?.target as? DetailTarget.Disk
                 if (open != null && !File(open.path).exists()) closeDetail()
-                load()
+                loadAll()
             }
         }
     }
@@ -1097,14 +1244,16 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The viewable images next to the one that is open, for stepping through a folder. */
-    fun siblingImages(path: String): List<FileItem> =
-        if (location !is Location.Disk) emptyList()
-        else items.filter { !it.isDirectory && FileTypes.isPreviewableImage(it.name) }.takeIf { list -> list.any { it.path == path } }.orEmpty()
+    fun siblingImages(path: String): List<FileItem> = panes
+        .filter { it.location is Location.Disk }
+        .map { p -> p.items.filter { !it.isDirectory && FileTypes.isPreviewableImage(it.name) } }
+        .firstOrNull { list -> list.any { it.path == path } }
+        .orEmpty()
 
     suspend fun saveEditor(editor: EditorSession): Boolean = try {
         editor.save()
         message("Saved ${editor.file.name}")
-        load()
+        loadAll()
         true
     } catch (e: IOException) {
         message("Could not save: ${e.message}")
@@ -1126,7 +1275,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 val archiveName = (target as? DetailTarget.Entry)?.archivePath?.let { File(it).name }.orEmpty()
                 requestPassword(archiveName, e.wrongPassword,
                     onSubmit = { pw ->
-                        archive = archive?.copy(password = pw)
+                        (target as? DetailTarget.Entry)?.let { updatePassword(it.archivePath, pw) }
                         loadDetail(target, forceText)
                     },
                     onCancel = {},
@@ -1245,6 +1394,12 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
         private const val PREVIEW_LIMIT = 64L * 1024 * 1024
 
         /** Kinds of archive entry worth pulling out for a preview, besides text and images. */
+        /** Recent files listed on the home page. */
+        private const val RECENT_ON_HOME = 8
+
+        /** Under the cache folder: files opened from other apps that could not be read in place. */
+        const val OPENED_DIR = "opened"
+
         private val PREVIEWED_KINDS = setOf(FileKind.OTHER, FileKind.PDF, FileKind.AUDIO, FileKind.VIDEO)
     }
 }

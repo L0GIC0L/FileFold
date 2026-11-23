@@ -41,8 +41,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -81,8 +82,8 @@ private const val SLIDE_MS = 400
  * behind it, so you can see where you are going and let go to cancel.
  */
 @Composable
-fun FolderPages(vm: BrowserViewModel, bottomPadding: Dp) {
-    val page = vm.page
+fun FolderPages(vm: BrowserViewModel, p: FolderPane, focused: Boolean, bottomPadding: Dp) {
+    val page = p.page
     val transitionState = remember { SeekableTransitionState(page) }
     val scope = rememberCoroutineScope()
 
@@ -92,12 +93,13 @@ fun FolderPages(vm: BrowserViewModel, bottomPadding: Dp) {
         if (transitionState.currentState != page || transitionState.targetState != page) transitionState.animateTo(page)
     }
 
-    val parent = vm.parentLocation
-    PredictiveBackHandler(enabled = parent != null && !vm.selectionMode && vm.search == null) { progress ->
+    // Only the focused side of split view answers the back gesture.
+    val parent = vm.parentOf(p.location)
+    PredictiveBackHandler(enabled = focused && parent != null && !p.selectionMode && p.search == null) { progress ->
         val target = Page(page.tabId, parent ?: return@PredictiveBackHandler)
         try {
             progress.collect { event -> transitionState.seekTo(event.progress, target) }
-            vm.navigateUp()
+            vm.navigateUp(p)
         } catch (e: CancellationException) {
             // Gesture abandoned: spring back to the folder we are in.
             scope.launch { transitionState.animateTo(transitionState.currentState) }
@@ -118,7 +120,7 @@ fun FolderPages(vm: BrowserViewModel, bottomPadding: Dp) {
         val corner by transition.animateDp(label = "corner") { state ->
             if (state == EnterExitState.PostExit && goingBack) 28.dp else 0.dp
         }
-        FolderPage(vm, shown, isCurrent = shown == vm.page, bottomPadding, Modifier.clip(RoundedCornerShape(corner)))
+        FolderPage(vm, p, shown, isCurrent = shown == p.page, bottomPadding, Modifier.clip(RoundedCornerShape(corner)))
     }
 }
 
@@ -146,11 +148,17 @@ private fun AnimatedContentTransitionScope<Page>.folderTransform(): ContentTrans
 
 /** One folder: breadcrumbs, archive banner and contents. Pages that are animating out or being previewed are inert. */
 @Composable
-private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bottomPadding: Dp, modifier: Modifier) {
+private fun FolderPage(vm: BrowserViewModel, p: FolderPane, page: Page, isCurrent: Boolean, bottomPadding: Dp, modifier: Modifier) {
     val location = page.location
+    if (location is Location.Home) {
+        Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
+            HomeScreen(vm, p, enabled = isCurrent, bottomPadding = bottomPadding)
+        }
+        return
+    }
     val inArchive = location is Location.InArchive
     val crumbs = remember(location, vm.places) { vm.breadcrumbs(location) }
-    val items = if (isCurrent) vm.items else remember(page) { vm.itemsFor(location) }
+    val items = if (isCurrent) p.items else remember(page) { vm.itemsFor(location, p) }
 
     // Each folder in each tab keeps its own scroll position.
     val saved = remember(page) { vm.scrollMemory[page.scrollKey] }
@@ -178,8 +186,8 @@ private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bot
     // Search results and folder sizes arrive bit by bit and re-sort the list as they do. Left alone,
     // the list would follow whichever row was first and hide newer rows above it, so it is held at
     // the top until the reader scrolls it themselves.
-    val query = if (isCurrent) vm.search else null
-    val usage = isCurrent && vm.sizeView && location is Location.Disk && query?.isActive != true
+    val query = if (isCurrent) p.search else null
+    val usage = isCurrent && p.sizeView && location is Location.Disk && query?.isActive != true
     var holdAtTop by remember(page, query, usage) { mutableStateOf(true) }
     LaunchedEffect(page, query, usage) {
         snapshotFlow { listState.isScrollInProgress || gridState.isScrollInProgress }.first { it }
@@ -195,34 +203,33 @@ private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bot
     // Opaque, so the folders do not show through each other while they move.
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            Breadcrumbs(crumbs) { if (isCurrent) vm.navigate(it) }
-            if (usage) StorageBanner(vm)
+            // Anything done in a pane first makes it the focused one, so the top bar follows.
+            Breadcrumbs(crumbs) { if (isCurrent) { vm.focus(p); vm.navigate(it, p) } }
+            if (usage) StorageBanner(vm, p)
             if (isCurrent && location is Location.Trash && items.isNotEmpty()) TrashBanner()
-            val archive = vm.archive
-            if (location is Location.InArchive && archive != null && archive.file.path == location.archivePath &&
-                (!isCurrent || vm.error == null)
-            ) {
-                ArchiveBanner(archive) { if (isCurrent) vm.promptExtract(archive.file.path) }
+            val archive = (location as? Location.InArchive)?.let { vm.archiveFor(it.archivePath) }
+            if (archive != null && (!isCurrent || p.error == null)) {
+                ArchiveBanner(archive) { if (isCurrent) { vm.focus(p); vm.promptExtract(archive.file.path) } }
             }
             var userRefresh by remember { mutableStateOf(false) }
-            LaunchedEffect(vm.loading) { if (!vm.loading) userRefresh = false }
+            LaunchedEffect(p.loading) { if (!p.loading) userRefresh = false }
             PullToRefreshBox(
                 isRefreshing = userRefresh && isCurrent,
-                onRefresh = { if (isCurrent) { userRefresh = true; vm.refresh() } },
+                onRefresh = { if (isCurrent) { userRefresh = true; vm.focus(p); vm.refresh() } },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                // Room at the bottom so the last row can scroll clear of the FAB and gesture bar.
+                // Room at the bottom so the last row can scroll clear of the FAB, toolbar and gesture bar.
                 val contentPadding = PaddingValues(bottom = bottomPadding + 96.dp)
-                val selection = if (isCurrent) vm.selection else emptySet()
-                val onClick: (io.github.l0gic0l.filefold.core.FileItem) -> Unit = { if (isCurrent) vm.open(it) }
-                val onLongClick: (io.github.l0gic0l.filefold.core.FileItem) -> Unit = { if (isCurrent) vm.toggleSelection(it) }
-                val error = if (isCurrent) vm.error else null
-                val searching = isCurrent && vm.search?.isActive == true
+                val selection = if (isCurrent) p.selection else emptySet()
+                val onClick: (io.github.l0gic0l.filefold.core.FileItem) -> Unit = { if (isCurrent) { vm.focus(p); vm.open(it) } }
+                val onLongClick: (io.github.l0gic0l.filefold.core.FileItem) -> Unit = { if (isCurrent) { vm.focus(p); vm.toggleSelection(it) } }
+                val error = if (isCurrent) p.error else null
+                val searching = isCurrent && p.search?.isActive == true
                 val thumbnails = !inArchive && vm.settings.showThumbnails
-                val total = vm.sizeViewTotal
+                val total = p.sizeViewTotal
                 when {
-                    error != null -> ErrorState(error) { vm.refresh() }
-                    items.isEmpty() && (!isCurrent || vm.loading || vm.searching) -> DelayedSpinner()
+                    error != null -> ErrorState(error) { vm.focus(p); vm.refresh() }
+                    items.isEmpty() && (!isCurrent || p.loading || p.searching) -> DelayedSpinner()
                     items.isEmpty() -> EmptyState(
                         when {
                             searching -> "No matches"
@@ -234,7 +241,7 @@ private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bot
                     vm.settings.gridView && !usage -> FileGrid(items, selection, inArchive, thumbnails, gridState, contentPadding, onClick, onLongClick)
                     else -> FileList(
                         items, selection, inArchive, thumbnails, listState, contentPadding, onClick, onLongClick,
-                        hint = if (isCurrent && (searching || location is Location.Trash)) vm::hintFor else null,
+                        hint = if (isCurrent && (searching || location is Location.Trash)) { item -> vm.hintFor(p, item) } else null,
                         share = if (usage && total > 0) { item -> item.size.toFloat() / total } else null,
                     )
                 }
@@ -243,66 +250,16 @@ private fun FolderPage(vm: BrowserViewModel, page: Page, isCurrent: Boolean, bot
     }
 }
 
-/** A spinner that only appears if loading takes long enough to notice, so fast folders do not flicker. */
+/** A loading indicator that only appears if loading takes long enough to notice, so fast folders do not flicker. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun DelayedSpinner() {
+internal fun DelayedSpinner() {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(250)
         visible = true
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (visible) CircularProgressIndicator()
-    }
-}
-
-/** The open tabs, shown once there is more than one. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TabStrip(vm: BrowserViewModel) {
-    val state = rememberLazyListState()
-    LaunchedEffect(vm.activeTabId, vm.tabs.size) {
-        val index = vm.tabs.indexOfFirst { it.id == vm.activeTabId }
-        if (index >= 0) state.animateScrollToItem(index)
-    }
-    LazyRow(
-        state = state,
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
-    ) {
-        items(vm.tabs, key = { it.id }) { tab ->
-            val active = tab.id == vm.activeTabId
-            Surface(
-                onClick = { vm.switchTab(tab.id) },
-                shape = RoundedCornerShape(14.dp),
-                color = if (active) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.animateItem(),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
-                    Icon(
-                        if (tab.location is Location.InArchive) Icons.Default.FolderZip else Icons.Default.Folder,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        vm.tabLabel(tab.location),
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 160.dp),
-                    )
-                    IconButton(onClick = { vm.closeTab(tab.id) }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Close, "Close tab", Modifier.size(16.dp))
-                    }
-                }
-            }
-        }
-        item(key = "new") {
-            IconButton(onClick = { vm.newTab() }) { Icon(Icons.Default.Add, "New tab") }
-        }
+        if (visible) LoadingIndicator()
     }
 }

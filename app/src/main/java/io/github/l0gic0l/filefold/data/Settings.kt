@@ -76,13 +76,21 @@ data class AppSettings(
     val favorites: List<String> = emptyList(),
 )
 
-/** Open tabs as saved strings (see Location.encode) and which one was active. */
-data class SavedTabs(val tabs: List<String>, val active: Int)
+/** One pane's open tabs as saved strings (see Location.encode) and which one was active. */
+data class SavedPane(val tabs: List<String>, val active: Int)
+
+/** The open panes (two in split view) and which one had focus. */
+data class SavedTabs(val panes: List<SavedPane>, val focused: Int)
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
 /** User preferences, persisted with DataStore so they survive restarts. */
 class SettingsRepository(private val context: Context) {
+
+    companion object {
+        /** Split view shows at most two panes. */
+        const val MAX_PANES = 2
+    }
 
     private object Keys {
         val sortBy = stringPreferencesKey("sort_by")
@@ -96,8 +104,10 @@ class SettingsRepository(private val context: Context) {
         val useTrash = booleanPreferencesKey("use_trash")
         val showThumbnails = booleanPreferencesKey("show_thumbnails")
         val favorites = stringPreferencesKey("favorites")
-        val tabs = stringPreferencesKey("tabs")
-        val activeTab = intPreferencesKey("active_tab")
+        // The first pane keeps the keys used before split view existed, so old tabs come back.
+        fun tabs(pane: Int) = stringPreferencesKey(if (pane == 0) "tabs" else "tabs_${pane + 1}")
+        fun activeTab(pane: Int) = intPreferencesKey(if (pane == 0) "active_tab" else "active_tab_${pane + 1}")
+        val focusedPane = intPreferencesKey("focused_pane")
 
         val themeMode = stringPreferencesKey("theme_mode")
         val colorSource = stringPreferencesKey("color_source")
@@ -163,12 +173,24 @@ class SettingsRepository(private val context: Context) {
 
     /** Kept apart from [settings] so that saving tabs on every navigation does not re-emit settings. */
     val savedTabs: Flow<SavedTabs> = context.dataStore.data.map { prefs ->
-        SavedTabs(prefs[Keys.tabs]?.split('\n')?.filter { it.isNotEmpty() }.orEmpty(), prefs[Keys.activeTab] ?: 0)
+        val panes = (0 until MAX_PANES).map { pane ->
+            SavedPane(prefs[Keys.tabs(pane)]?.split('\n')?.filter { it.isNotEmpty() }.orEmpty(), prefs[Keys.activeTab(pane)] ?: 0)
+        }.filter { it.tabs.isNotEmpty() }
+        SavedTabs(panes, prefs[Keys.focusedPane] ?: 0)
     }
 
-    suspend fun setTabs(tabs: List<String>, active: Int) = edit {
-        it[Keys.tabs] = tabs.joinToString("\n")
-        it[Keys.activeTab] = active
+    suspend fun setTabs(panes: List<SavedPane>, focused: Int) = edit {
+        for (pane in 0 until MAX_PANES) {
+            val saved = panes.getOrNull(pane)
+            if (saved == null) {
+                it.remove(Keys.tabs(pane))
+                it.remove(Keys.activeTab(pane))
+            } else {
+                it[Keys.tabs(pane)] = saved.tabs.joinToString("\n")
+                it[Keys.activeTab(pane)] = saved.active
+            }
+        }
+        it[Keys.focusedPane] = focused
     }
 
     suspend fun setSort(sort: SortOptions) = edit {
