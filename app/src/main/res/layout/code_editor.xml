@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The text editor's view. Settings here are the ones that keep large files fast:
+    simple line breaking without hyphenation is far cheaper to lay out, no suggestions
+    or spell checking, no autofill or content capture (either could copy the whole text
+    on every change), and the text is never written into saved instance state
+    (a multi-megabyte file there would crash the app when it goes to the background).
+    allowUndo is off because the editor keeps its own undo history.
+-->
+<io.github.l0gic0l.filefold.ui.detail.CodeEditText xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:allowUndo="false"
+    android:background="@null"
+    android:breakStrategy="simple"
+    android:fontFamily="monospace"
+    android:freezesText="false"
+    android:gravity="top|start"
+    android:hyphenationFrequency="none"
+    android:imeOptions="flagNoExtractUi|flagNoFullscreen"
+    android:importantForAutofill="no"
+    android:importantForContentCapture="noExcludeDescendants"
+    android:inputType="textMultiLine|textNoSuggestions"
+    android:lineSpacingMultiplier="1.15"
+    android:overScrollMode="never"
+    android:saveEnabled="false"
+    android:scrollbars="vertical"
+    android:textSize="14sp" />

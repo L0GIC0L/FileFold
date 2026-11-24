@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Folder tab -->
+    <path
+        android:fillColor="#FF2F5BA8"
+        android:pathData="M33,38 L48,38 L53,43 L75,43 Q78,43 78,46 L78,50 L30,50 L30,41 Q30,38 33,38 Z" />
+    <!-- Folder body -->
+    <path
+        android:fillColor="#FF4A7BD0"
+        android:pathData="M30,48 L78,48 L78,70 Q78,73 75,73 L33,73 Q30,73 30,70 Z" />
+    <!-- Fold crease -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillAlpha="0.85"
+        android:pathData="M53,48 L55,48 L55,73 L53,73 Z" />
+</vector>

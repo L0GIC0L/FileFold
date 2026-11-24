@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files FileFold may hand to other apps through "Open with" and "Share". -->
+<paths>
+    <root-path name="storage" path="storage" />
+    <external-path name="external" path="." />
+    <cache-path name="cache" path="." />
+</paths>
