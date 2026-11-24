@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -56,6 +58,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -130,6 +139,12 @@ class TabDragState {
     }
 }
 
+// Split view's spacing. Each side's outline keeps clear of the screen edges and the gesture bar,
+// and what is inside keeps clear of the outline's rounded corners.
+private val SplitGutter = 8.dp
+private val SplitCorner = 20.dp
+private val SplitInset = 8.dp
+
 /** [grab] is where on the tab the finger took hold, so the tab stays under it as it moves. */
 data class DraggedTab(val tab: BrowserTab, val from: FolderPane, val label: String, val grab: Offset)
 
@@ -160,18 +175,21 @@ fun PaneArea(vm: BrowserViewModel, bottomPadding: Dp, modifier: Modifier = Modif
             var ratio by rememberSaveable { mutableFloatStateOf(0.5f) }
             val total = (if (sideBySide) constraints.maxWidth else constraints.maxHeight).toFloat().coerceAtLeast(1f)
             val resize: (Float) -> Unit = { delta -> ratio = (ratio + delta / total).coerceIn(0.25f, 0.75f) }
+            // The outlines stop above the gesture bar (or the paste bar), rather than running under it.
+            val gutters = Modifier
+                .fillMaxSize()
+                .padding(start = SplitGutter, end = SplitGutter, top = SplitGutter / 2, bottom = bottomPadding + SplitGutter)
             if (sideBySide) {
-                Row(Modifier.fillMaxSize()) {
-                    PaneColumn(vm, panes[0], panes[0] === focused, true, true, drag, bottomPadding, Modifier.weight(ratio).fillMaxHeight())
+                Row(gutters) {
+                    PaneColumn(vm, panes[0], panes[0] === focused, true, true, drag, 0.dp, Modifier.weight(ratio).fillMaxHeight())
                     SplitDivider(sideBySide = true, onDrag = resize)
-                    PaneColumn(vm, panes[1], panes[1] === focused, true, true, drag, bottomPadding, Modifier.weight(1f - ratio).fillMaxHeight())
+                    PaneColumn(vm, panes[1], panes[1] === focused, true, true, drag, 0.dp, Modifier.weight(1f - ratio).fillMaxHeight())
                 }
             } else {
-                Column(Modifier.fillMaxSize()) {
-                    // Only the lower pane reaches the gesture bar.
+                Column(gutters) {
                     PaneColumn(vm, panes[0], panes[0] === focused, true, false, drag, 0.dp, Modifier.weight(ratio).fillMaxWidth())
                     SplitDivider(sideBySide = false, onDrag = resize)
-                    PaneColumn(vm, panes[1], panes[1] === focused, true, false, drag, bottomPadding, Modifier.weight(1f - ratio).fillMaxWidth())
+                    PaneColumn(vm, panes[1], panes[1] === focused, true, false, drag, 0.dp, Modifier.weight(1f - ratio).fillMaxWidth())
                 }
             }
         }
@@ -197,16 +215,17 @@ private fun PaneColumn(
             drag.stripBounds.remove(p)
         }
     }
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(SplitCorner)
     val frame = if (split) {
         Modifier
-            .padding(4.dp)
             .clip(shape)
             .border(
                 width = if (focused) 2.dp else 1.dp,
                 color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                 shape = shape,
             )
+            // Room above the tabs, so the first one clears the rounded corner.
+            .padding(top = SplitInset)
     } else {
         Modifier
     }
@@ -224,7 +243,14 @@ private fun PaneColumn(
     ) {
         TabStrip(vm, p, split, sideBySide, drag)
         if (focused) p.search?.let { SearchFilters(vm, it) }
-        FolderPages(vm, p, focused, bottomPadding)
+        Box(Modifier.weight(1f)) {
+            FolderPages(vm, p, focused, bottomPadding)
+            // The create button belongs to the side it creates in: the focused one.
+            val canCreate = p.location is Location.Disk && !p.selectionMode && p.search == null && vm.clipboard == null
+            if (focused && canCreate) {
+                NewItemButton(vm, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = bottomPadding + 16.dp))
+            }
+        }
     }
 }
 
@@ -259,15 +285,30 @@ private fun tabIcon(location: Location): ImageVector = when (location) {
 @Composable
 private fun TabStrip(vm: BrowserViewModel, p: FolderPane, split: Boolean, sideBySide: Boolean, drag: TabDragState) {
     val state = rememberLazyListState()
+    val density = LocalDensity.current
+    // Brings the active tab fully into view, with a little room either side, only when it is not already.
     LaunchedEffect(p.activeTabId, p.tabs.size) {
-        val index = p.tabs.indexOfFirst { it.id == p.activeTabId }
-        if (index >= 0) state.animateScrollToItem(index)
+        val index = p.tabs.indexOfFirst { it.id == p.activeTabId }.takeIf { it >= 0 } ?: return@LaunchedEffect
+        if (state.layoutInfo.visibleItemsInfo.none { it.index == index }) state.scrollToItem(index)
+        val info = state.layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return@LaunchedEffect
+        val margin = with(density) { 24.dp.toPx() }
+        val start = info.viewportStartOffset + margin
+        val end = info.viewportEndOffset - margin
+        val delta = when {
+            item.offset < start -> item.offset - start
+            item.offset + item.size > end -> minOf(item.offset + item.size - end, item.offset - start)
+            else -> 0f
+        }
+        if (delta != 0f) state.animateScrollBy(delta)
     }
     val haptics = LocalHapticFeedback.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
+            // A little room below the top bar, so the tabs do not sit against its edge.
+            .padding(top = if (split) 0.dp else 4.dp, end = if (split) 4.dp else 0.dp)
             .height(48.dp)
             .onGloballyPositioned { drag.stripBounds[p] = it.boundsInWindow() },
     ) {
@@ -276,7 +317,8 @@ private fun TabStrip(vm: BrowserViewModel, p: FolderPane, split: Boolean, sideBy
             contentPadding = PaddingValues(start = 12.dp, end = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f),
+            // Tabs that run past either end fade out instead of being cut off.
+            modifier = Modifier.weight(1f).fadeEdges(state, 20.dp),
         ) {
             items(p.tabs, key = { it.id }) { tab ->
                 DisposableEffect(tab.id) { onDispose { drag.tabBounds.remove(tab.id) } }
@@ -315,7 +357,7 @@ private fun TabStrip(vm: BrowserViewModel, p: FolderPane, split: Boolean, sideBy
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 160.dp).padding(vertical = 10.dp),
+                            modifier = Modifier.widthIn(max = 160.dp).padding(vertical = 8.dp),
                         )
                         // The only tab of a single pane cannot be closed.
                         if (p.tabs.size > 1 || split) {
@@ -338,6 +380,29 @@ private fun TabStrip(vm: BrowserViewModel, p: FolderPane, split: Boolean, sideBy
         }
     }
 }
+
+/** Fades the first and last [width] of a horizontal list where there is more to scroll to. */
+private fun Modifier.fadeEdges(state: LazyListState, width: Dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val fade = width.toPx().coerceAtMost(size.width / 2)
+        if (state.canScrollBackward) {
+            drawRect(
+                Brush.horizontalGradient(0f to Color.Transparent, 1f to Color.Black, startX = 0f, endX = fade),
+                size = Size(fade, size.height),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+        if (state.canScrollForward) {
+            drawRect(
+                Brush.horizontalGradient(0f to Color.Black, 1f to Color.Transparent, startX = size.width - fade, endX = size.width),
+                topLeft = Offset(size.width - fade, 0f),
+                size = Size(fade, size.height),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+    }
 
 /** While a tab is dragged: a copy of it under the finger, and where it would land. */
 @Composable

@@ -128,7 +128,7 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
     val title = remember(location, vm.places) { vm.tabLabel(location) }
 
     // Selection and search close on back; going up a folder is the predictive gesture in FolderPages.
-    BackHandler(enabled = vm.selectionMode || vm.search != null) { vm.back() }
+    BackHandler(enabled = !LocalBackTakenOver.current && (vm.selectionMode || vm.search != null)) { vm.back() }
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
@@ -152,9 +152,6 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
                 )
             }
         },
-        floatingActionButton = {
-            if (location is Location.Disk && !vm.selectionMode && vm.clipboard == null && vm.search == null) NewItemButton(vm)
-        },
         bottomBar = {
             AnimatedVisibility(
                 visible = vm.clipboard != null,
@@ -170,7 +167,9 @@ fun BrowserPane(vm: BrowserViewModel, showMenuButton: Boolean, onMenu: () -> Uni
                 visible = vm.selectionMode,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = padding.calculateBottomPadding() + 16.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = padding.calculateBottomPadding() + if (vm.isSplit) 24.dp else 16.dp),
             ) { SelectionToolbar(vm) }
         }
     }
@@ -396,11 +395,13 @@ private fun SelectionBar(vm: BrowserViewModel) {
                         if (single != null && !single.isDirectory) {
                             action("Checksums…", Icons.Default.Fingerprint) { vm.clearSelection(); vm.dialog = BrowserDialog.Checksums(File(single.path)) }
                         }
-                        if (single != null && single.isDirectory) {
-                            if (vm.isFavorite(single.path)) {
-                                action("Remove from favourites", Icons.Default.Star) { vm.toggleFavorite(single.path) }
+                        // Folders can be pinned to the side panel, one or several at a time.
+                        if (selected.isNotEmpty() && selected.all { it.isDirectory }) {
+                            val paths = selected.map { it.path }
+                            if (paths.all(vm::isFavorite)) {
+                                action("Remove from favourites", Icons.Default.Star) { vm.setFavorites(paths, pinned = false) }
                             } else {
-                                action("Add to favourites", Icons.Default.StarBorder) { vm.toggleFavorite(single.path) }
+                                action("Add to favourites", Icons.Default.StarBorder) { vm.setFavorites(paths, pinned = true) }
                             }
                         }
                         if (single != null) {
@@ -466,9 +467,9 @@ private fun suggestedArchiveName(vm: BrowserViewModel, selected: List<FileItem>)
 }
 
 @Composable
-private fun NewItemButton(vm: BrowserViewModel) {
+internal fun NewItemButton(vm: BrowserViewModel, modifier: Modifier = Modifier) {
     var open by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         FloatingActionButton(onClick = { open = true }) { Icon(Icons.Default.Add, "Create new") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(

@@ -15,11 +15,15 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -41,6 +45,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDragHandle
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.WindowAdaptiveInfo
@@ -55,6 +60,7 @@ import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneSca
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -72,6 +78,7 @@ import androidx.window.core.layout.computeWindowSizeClass
 import io.github.l0gic0l.filefold.ui.browser.BrowserDialogs
 import io.github.l0gic0l.filefold.ui.browser.BrowserPane
 import io.github.l0gic0l.filefold.ui.browser.BrowserViewModel
+import io.github.l0gic0l.filefold.ui.browser.LocalBackTakenOver
 import io.github.l0gic0l.filefold.ui.browser.Location
 import io.github.l0gic0l.filefold.ui.browser.OperationDialog
 import io.github.l0gic0l.filefold.ui.browser.openSettings
@@ -200,7 +207,9 @@ private fun AdaptiveApp(vm: BrowserViewModel, adaptiveInfo: WindowAdaptiveInfo) 
         ) {
             Row(Modifier.fillMaxSize()) {
                 if (wide) PlacesRail(vm)
-                Box(Modifier.weight(1f)) { panes(!wide) }
+                Box(Modifier.weight(1f)) {
+                    CompositionLocalProvider(LocalBackTakenOver provides (!wide && drawerState.isOpen)) { panes(!wide) }
+                }
             }
         }
 
@@ -268,6 +277,7 @@ private fun PlacesDrawer(vm: BrowserViewModel, onDone: () -> Unit) {
                 onClick = { open(place.path) },
             )
         }
+        FavouritesSection(vm, current, open)
         if (shortcuts.isNotEmpty()) {
             DrawerDivider()
             shortcuts.forEach { place ->
@@ -276,27 +286,6 @@ private fun PlacesDrawer(vm: BrowserViewModel, onDone: () -> Unit) {
                     icon = { Icon(place.icon, null) },
                     selected = place.path == current,
                     onClick = { open(place.path) },
-                )
-            }
-        }
-        val favorites = vm.settings.favorites
-        if (favorites.isNotEmpty()) {
-            DrawerDivider()
-            Text(
-                "Favourites",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            favorites.forEach { path ->
-                NavigationDrawerItem(
-                    label = { Text(File(path).name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    icon = { Icon(Icons.Default.Star, null) },
-                    badge = {
-                        IconButton(onClick = { vm.toggleFavorite(path) }) { Icon(Icons.Default.Close, "Remove from favourites") }
-                    },
-                    selected = path == current,
-                    onClick = { open(path) },
                 )
             }
         }
@@ -325,6 +314,51 @@ private fun PlacesDrawer(vm: BrowserViewModel, onDone: () -> Unit) {
             },
         )
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+/**
+ * Folders the user pinned, near the top of the drawer. Always shown, with a button to pin the
+ * folder that is open, so it is clear how to add one.
+ */
+@Composable
+private fun FavouritesSection(vm: BrowserViewModel, current: String?, open: (String) -> Unit) {
+    DrawerDivider()
+    val here = (vm.location as? Location.Disk)?.path?.takeUnless(vm::isFavorite)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp, end = 4.dp)) {
+        Text(
+            "Favourites",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+        )
+        if (here != null) {
+            TextButton(onClick = { vm.toggleFavorite(here) }, modifier = Modifier.widthIn(max = 200.dp)) {
+                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Add \"${File(here).name}\"", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+    val favorites = vm.settings.favorites
+    if (favorites.isEmpty()) {
+        Text(
+            "Pin folders you use often. Open one and tap Add above, or select folders and choose Add to favourites.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+        )
+    }
+    favorites.forEach { path ->
+        NavigationDrawerItem(
+            label = { Text(File(path).name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Star, null) },
+            badge = {
+                IconButton(onClick = { vm.toggleFavorite(path) }) { Icon(Icons.Default.Close, "Remove from favourites") }
+            },
+            selected = path == current,
+            onClick = { open(path) },
+        )
     }
 }
 
@@ -367,6 +401,14 @@ private fun PlacesRail(vm: BrowserViewModel) {
                     onClick = { vm.openPlace(path) },
                     icon = { Icon(Icons.Default.Star, null) },
                     label = { Text(File(path).name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                )
+            }
+            (vm.location as? Location.Disk)?.path?.takeUnless(vm::isFavorite)?.let { here ->
+                NavigationRailItem(
+                    selected = false,
+                    onClick = { vm.toggleFavorite(here) },
+                    icon = { Icon(Icons.Default.StarBorder, null) },
+                    label = { Text("Favourite") },
                 )
             }
             NavigationRailItem(

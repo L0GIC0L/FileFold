@@ -38,7 +38,10 @@ Android 17 (API 37) and runs on Android 11 (API 30) and newer.
   of storage to see every picture. It also searches inside an open archive.
 - **Recent files** in the drawer lists what changed in the last week, newest
   first.
-- **Favourites:** pin any folder to the drawer from the menu.
+- **Favourites** sit near the top of the side panel. Pin the folder you are in
+  with the **Add** button in that section (or **Add to favourites** in the
+  folder's menu), or select one or more folders and choose **Add to
+  favourites**. The × next to a favourite removes it.
 - **Storage usage** (in the menu) adds up what each sub-folder holds, puts
   the biggest first with a bar for its share, and shows how full the volume
   is. It stays on as you move between folders. The drawer shows free space

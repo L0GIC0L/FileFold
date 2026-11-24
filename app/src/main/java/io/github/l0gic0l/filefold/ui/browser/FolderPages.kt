@@ -53,6 +53,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/**
+ * True while something drawn over the folders (the navigation drawer) owns the back gesture.
+ * The folders' own back handling stands aside then, whatever order the handlers were set up in:
+ * a pane rebuilt after split view closes would otherwise be the last one set up, and win.
+ */
+val LocalBackTakenOver = compositionLocalOf { false }
 
 /** Material's emphasised easing: a quick start that settles gently. */
 private val Emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
@@ -95,7 +103,8 @@ fun FolderPages(vm: BrowserViewModel, p: FolderPane, focused: Boolean, bottomPad
 
     // Only the focused side of split view answers the back gesture.
     val parent = vm.parentOf(p.location)
-    PredictiveBackHandler(enabled = focused && parent != null && !p.selectionMode && p.search == null) { progress ->
+    val takenOver = LocalBackTakenOver.current
+    PredictiveBackHandler(enabled = !takenOver && focused && parent != null && !p.selectionMode && p.search == null) { progress ->
         val target = Page(page.tabId, parent ?: return@PredictiveBackHandler)
         try {
             progress.collect { event -> transitionState.seekTo(event.progress, target) }

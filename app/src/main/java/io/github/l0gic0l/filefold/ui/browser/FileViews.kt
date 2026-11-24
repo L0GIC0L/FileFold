@@ -116,8 +116,9 @@ fun FileList(
                 ),
                 modifier = Modifier
                     .animateItem()
-                    .padding(horizontal = 8.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    // A small gap between rows, so selected ones read as separate cards rather than one block.
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(20.dp))
                     .combinedClickable(onClick = { onClick(item) }, onLongClick = { onLongClick(item) }),
             )
         }

@@ -454,6 +454,16 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isFavorite(path: String): Boolean = path in settings.favorites
 
+    /** Pins (or unpins) several folders at once. */
+    fun setFavorites(paths: List<String>, pinned: Boolean) {
+        val favorites = settings.favorites
+        val updated = if (pinned) favorites + paths.filter { it !in favorites } else favorites - paths.toSet()
+        viewModelScope.launch { settingsRepo.setFavorites(updated) }
+        val what = paths.singleOrNull()?.let { "\"${File(it).name}\"" } ?: plural(paths.size, "folder")
+        message(if (pinned) "Added $what to favourites" else "Removed $what from favourites")
+        clearSelection()
+    }
+
     fun toggleFavorite(path: String) {
         val favorites = settings.favorites
         val pinned = path !in favorites
